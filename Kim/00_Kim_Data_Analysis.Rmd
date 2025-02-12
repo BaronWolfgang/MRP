@@ -1,0 +1,529 @@
+---
+title: "Kim data analysis"
+author: "Jan Paul van Meenen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+#Packages
+```{r}
+data_management_packages_to_install <- c("data.table", "tidyverse", "ggplot2", "remotes", "Platypus", "msa","cowplot")
+
+packages_to_install <- c(data_management_packages_to_install)
+
+# Check and install packages using a for loop
+for (package in packages_to_install) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    install.packages(package)
+  }
+  library(package, character.only = TRUE)
+}
+```
+
+#Load in Kim data
+```{r}
+load("data/vdj_Kim_sc_reclonotyped.RData") #vdj
+```
+
+## quick check
+```{r}
+head(vdj)
+colnames(vdj)
+```
+Each row corresponds to a cell, sample_id links to the person, timepoint referes to the timepoint that sample was taken, tissue (=blood/lymphnode)
+
+# Recreate plots
+## cellcount and frequency
+### cellcount
+```{r, fig.width=14}
+VDJ_cellcount <- vdj %>% 
+  group_by(sample_id) %>%
+  summarise(number_of_cells = n()) %>% 
+  arrange(desc(number_of_cells))
+
+cellcount_order <- VDJ_cellcount$sample_id
+
+VDJ_cellcount_plot <- VDJ_cellcount %>%
+  mutate(sample_id = factor(sample_id, levels = cellcount_order)) %>%
+  ggplot(aes(x=sample_id, y = number_of_cells, fill=sample_id)) +
+  geom_bar(position = "stack", stat="identity") +
+  theme_minimal() + 
+  ylab("Number of cells") +
+  xlab("") +
+  scale_y_continuous(limits = c(0,30000)) +
+  scale_fill_manual(values = rep(c("darkorchid4", "darkorchid1", "mediumorchid1", "mediumpurple3"), length.out = length(unique(vdj$sample_id)))) +
+  theme(legend.position = "none",
+        panel.grid = element_blank(), 
+        axis.title.y = element_text(size=20),
+        axis.text.y = element_text(size=20), 
+        axis.text.x = element_text(size=20),
+        plot.margin = margin(0,0,0,0) 
+        ) 
+  
+VDJ_cellcount_plot
+```
+
+### frequency
+Similar to S1
+```{r}
+VDJ_clonal_barplot
+```
+```{r, fig.width=14}
+output_VDJ_barplots <- VDJ_clonal_barplot(VDJ=vdj, group.by="sample_id", counts.to.use = "clonotype_id")
+
+output_VDJ_bardata_combined <-  output_VDJ_barplots %>%
+  lapply(., function(out) out$data) %>%
+  do.call(rbind, .) 
+
+cl = setNames(output_VDJ_bardata_combined$manual_colors, output_VDJ_bardata_combined$Var1)
+
+VDJ_barplot <- output_VDJ_bardata_combined %>%
+  mutate(sample = factor(sample, levels = cellcount_order)) %>%
+  group_by(sample) %>%
+  arrange(desc(Freq)) %>%
+  ggplot(aes(x = sample, y=Freq, fill = factor(Var1, levels = unique(Var1)))) +
+  geom_bar(position = "fill", stat = "identity") +
+  scale_fill_manual(values = cl) +
+  theme_minimal() +
+  ylab("Percentage of cells") +
+  xlab("") +
+  theme(legend.position = "none",
+        panel.grid = element_blank(), 
+        axis.title.y = element_text(size=20),
+        axis.text.y = element_text(size=20), 
+        axis.text.x = element_text(size=20),
+        plot.margin = margin(0,0,0,0) 
+        ) 
+VDJ_barplot
+```
+
+```{r, fig.width = 14}
+plot_grid(VDJ_cellcount_plot + theme(axis.text.x = element_blank()), 
+          VDJ_barplot, 
+          ncol = 1, 
+          align = "hv",
+          rel_heights = c(1:2)
+          )
+```
+
+
+## clonal rank
+### isotype
+```{r}
+VDJ_clonal_expansion
+```
+
+```{r}
+VDJ_clonal_expansion_out_isotype <- VDJ_clonal_expansion(VDJ = vdj, subtypes = TRUE, celltype = "Bcells", color.by = "isotype")
+VDJ_clonal_expansion_out_isotype
+VDJ_clonal_expansion_out_isotype_combined <- VDJ_clonal_expansion_out_isotype[[2]] %>%
+  do.call(rbind, .) %>%
+  rownames_to_column(var = "row_id") %>% 
+  mutate(sample = gsub("\\..*$", "", row_id))
+
+colnames(VDJ_clonal_expansion_out_isotype_combined)
+```
+
+```{r, fig.width=14}
+VDJ_clonal_expansion_out_isotype_combined %>%
+  mutate(Color = gsub("[0-9]", "", Isotype)) %>%
+  ggplot(aes(fill = Color, y=Counts, x=ClonalRank)) +
+  geom_bar(stat="identity", width=0.6, color="black") + 
+  theme_bw() + 
+  scale_fill_manual(values = c("IGHG" = "green4", "IGHM" = "black", "IGHA" = "red3", "IGHD"="blue", "IGHE"="purple", "Unknown"="gray")) + 
+  theme_classic() + 
+  #title(sample) + 
+  theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_continuous(expand = c(0,0.5)) + 
+  labs(x = "Clonal rank", y = "Number of cells") +
+  facet_wrap(~sample, scales = "free_y", nrow = 1) +
+  geom_text(aes(label = sample, x=25, y=Inf, vjust=1.5), check_overlap = TRUE) + 
+  guides(
+    fill = guide_legend(title = "Isotype")
+         ) + 
+  theme(
+    strip.placement = "inside",
+    strip.text = element_blank(),
+    strip.background = element_blank()
+  )
+```
+
+#### subtype
+```{r, fig.width=14}
+VDJ_clonal_expansion_out_isotype_combined %>%
+  mutate(Color = Isotype) %>%
+  ggplot(aes(fill = Color, y=Counts, x=ClonalRank)) +
+  geom_bar(stat="identity", width=0.6, color="black") + 
+  theme_bw() + 
+  #scale_fill_manual(values = c("IGHG" = "green4", "IGHM" = "black", "IGHA" = "red3", "IGHD"="blue", "IGHE"="purple", "Unknown"="gray")) + 
+  scale_fill_manual(values = c("IGHG1" = "green","IGHG2" = "green3", "IGHG3"="green4", "IGHG4"="darkgreen", "IGHM" = "black", "IGHA1" = "red", "IGHA2"= "red4", "IGHD"="blue", "IGHE"="purple", "Unknown"="gray")) +
+  theme_classic() + 
+  #title(sample) + 
+  theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_continuous(expand = c(0,0.5)) + 
+  labs(x = "Clonal rank", y = "Number of cells") +
+  geom_text(aes(label = sample, x=25, y=Inf, vjust=1.5), check_overlap = TRUE) + 
+  guides(
+    fill = guide_legend(title = "Isotype")
+         ) + 
+  theme(
+    strip.placement = "inside",
+    strip.text = element_blank(),
+    strip.background = element_blank()
+  )
+```
+
+
+### tissue
+```{r}
+VDJ_clonal_expansion_out_tissue <- VDJ_clonal_expansion(VDJ = vdj, subtypes = TRUE, celltype = "Bcells", color.by = "tissue")
+VDJ_clonal_expansion_out_tissue
+VDJ_clonal_expansion_out_tissue_combined <- VDJ_clonal_expansion_out_tissue[[2]] %>%
+  do.call(rbind, .) %>%
+  rownames_to_column(var = "row_id") %>% 
+  mutate(sample = gsub("\\..*$", "", row_id))
+
+colnames(VDJ_clonal_expansion_out_tissue_combined)
+```
+
+```{r, fig.width=14}
+## Color palette from file
+ggplotColours <- function(n, h = c(0, 360) + 15){
+    if ((diff(h) %% 360) < 1) h[2] <- h[2] - 360/n
+    grDevices::hcl(h = (seq(h[1], h[2], length = n)), c = 100, l = 65)
+  }
+
+VDJ_clonal_expansion_out_tissue_combined %>%
+  #mutate(MainIsotype = gsub("[0-9]", "", Isotype)) %>%
+  ggplot(aes(fill = Color, y=Counts, x=ClonalRank)) +
+  geom_bar(stat="identity", width=0.6, color="black") + 
+  theme_bw() + 
+  scale_fill_manual(values = ggplotColours(n = length(unique(VDJ_clonal_expansion_out_tissue_combined$Color)))) +
+  theme_classic() + 
+  #title(sample) + 
+  theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_continuous(expand = c(0,0.5)) + 
+  labs(x = "Clonal rank", y = "Number of cells") +
+  facet_wrap(~sample, scales = "free_y", nrow = 1) +
+  geom_text(aes(label = sample, x=25, y=Inf, vjust=1.5), check_overlap = TRUE) + 
+  guides(
+    fill = guide_legend(title = "Tissue")
+         ) + 
+  theme(
+    strip.placement = "inside",
+    strip.text = element_blank(),
+    strip.background = element_blank()
+  ) -> plot_VDJ_clonal_expansion_out_tissue_combined
+
+VDJ_clonal_expansion_out_tissue_combined
+```
+
+### timepoint
+```{r}
+VDJ_clonal_expansion_out_timepoint <- VDJ_clonal_expansion(
+  VDJ = vdj %>%
+  mutate(timepoint = case_when(
+    timepoint == "d28+d35" ~ "d28d35",
+    TRUE ~ timepoint
+    )
+  ),
+  subtypes = TRUE, celltype = "Bcells", color.by = "timepoint")
+VDJ_clonal_expansion_out_timepoint
+
+VDJ_clonal_expansion_out_timepoint_combined <- VDJ_clonal_expansion_out_timepoint[[2]] %>%
+  do.call(rbind, .) %>%
+  rownames_to_column(var = "row_id") %>% 
+  mutate(sample = gsub("\\..*$", "", row_id))
+
+colnames(VDJ_clonal_expansion_out_timepoint_combined)
+```
+
+```{r, fig.width = 14}
+VDJ_clonal_expansion_out_timepoint_combined %>%
+  mutate(Color = as.character(Color)) %>%
+  #mutate(MainIsotype = gsub("[0-9]", "", Isotype)) %>%
+  ggplot(aes(fill = Color, y=Counts, x=ClonalRank)) +
+  geom_bar(stat="identity", width=0.6, color="black") + 
+  theme_bw() + 
+  scale_fill_manual(values = ggplotColours(n = length(unique(VDJ_clonal_expansion_out_timepoint_combined$Color)))) +
+  theme_classic() + 
+  #title(sample) + 
+  theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_continuous(expand = c(0,0.5)) + 
+  labs(x = "Clonal rank", y = "Number of cells") +
+  facet_wrap(~sample, scales = "free_y" #,
+             ) +
+             #nrow = 1) +
+  geom_text(aes(label = sample, x=25, y=Inf, vjust=1.5), check_overlap = TRUE) + 
+  guides(
+    fill = guide_legend(title = "Timepoint")
+         ) + 
+  theme(
+    strip.placement = "inside",
+    strip.text = element_blank(),
+    strip.background = element_blank()
+  ) -> plot_VDJ_clonal_expansion_out_timepoint_combined
+
+plot_VDJ_clonal_expansion_out_timepoint_combined
+```
+
+```{r, fig,width=14}
+VDJ_clonal_expansion_out_timepoint[[2]]$`368-13` %>%
+  mutate(Color = as.character(Color)) %>%
+  ggplot(aes(fill = Color, y=Counts, x=ClonalRank)) +
+  geom_bar(stat="identity", width=0.6, color="black") + 
+  theme_bw() + 
+  scale_fill_manual(values = ggplotColours(n = length(unique(VDJ_clonal_expansion_out_timepoint_combined$Color)))) +
+  theme_classic() + 
+  #title(sample) + 
+  theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_continuous(expand = c(0,0.5)) + 
+  labs(x = "Clonal rank", y = "Number of cells") +
+  #facet_wrap(~sample, scales = "free_y", nrow = 1) +
+  #geom_text(aes(label = sample, x=25, y=Inf, vjust=1.5), check_overlap = TRUE) + 
+  guides(
+    fill = guide_legend(title = "Timepoint")
+         ) + 
+  theme(
+    strip.placement = "inside",
+    strip.text = element_blank(),
+    strip.background = element_blank()
+  )
+  
+```
+
+
+### v-gene
+```{r}
+length(unique(vdj$VDJ_vgene))
+unique(vdj$VDJ_vgene)
+```
+
+
+```{r}
+VDJ_clonal_expansion_out_vgene <- VDJ_clonal_expansion(VDJ = vdj, subtypes = TRUE, celltype = "Bcells", color.by = "VDJ_vgene")
+VDJ_clonal_expansion_out_vgene
+VDJ_clonal_expansion_out_vgene_combined <- VDJ_clonal_expansion_out_vgene[[2]] %>%
+  do.call(rbind, .) %>%
+  rownames_to_column(var = "row_id") %>% 
+  mutate(sample = gsub("\\..*$", "", row_id))
+
+colnames(VDJ_clonal_expansion_out_vgene_combined)
+```
+
+```{r, fig.width=14}
+VDJ_clonal_expansion_out_vgene_combined %>%
+  mutate(Color = sub("^([^0-9]+[0-9]).*", "\\1", Color)) %>%
+  #select(Color) %>% unique()
+  ggplot(aes(fill = Color, y=Counts, x=ClonalRank)) +
+  geom_bar(stat="identity", width=0.6, color="black") + 
+  theme_bw() + 
+  scale_fill_manual(values = ggplotColours(
+    n = length(
+      VDJ_clonal_expansion_out_vgene_combined %>% 
+        mutate(Color = sub("^([^0-9]+[0-9]).*", "\\1", Color)) %>%
+        select(Color) %>% unique() %>% pull()
+    )
+  )) +
+  theme_classic() + 
+  #title(sample) + 
+  theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_continuous(expand = c(0,0.5)) + 
+  labs(x = "Clonal rank", y = "Number of cells") +
+  facet_wrap(~sample, scales = "free_y", nrow = 1) +
+  #facet_grid(cols = vars(sample), scales = "free_y", space = "free_y", axis = "all_y") +
+  geom_text(aes(label = sample, x=25, y=Inf, vjust=1.5), check_overlap = TRUE) + 
+  guides(
+    fill = guide_legend(title = "V-gene")
+  ) + 
+  theme(
+    strip.placement = "inside",
+    strip.text = element_blank(),
+    strip.background = element_blank()
+  ) -> plot_VDJ_clonal_expansion_out_vgene_combined
+
+plot_VDJ_clonal_expansion_out_vgene_combined
+```
+
+## together
+```{}
+VDJ_clonal_expansion_out_combined_colorby <- bind_rows(
+  VDJ_clonal_expansion_out_isotype_combined %>%
+    mutate(color_by = "isotype",
+           Color = Isotype),
+  VDJ_clonal_expansion_out_tissue_combined %>%
+    mutate(color_by = "tissue"),
+  VDJ_clonal_expansion_out_timepoint_combined %>%
+    mutate(color_by = "timepoint")
+  )
+```
+
+```{, fig.width = 20}
+VDJ_clonal_expansion_out_combined_colorby %>%
+  ggplot(aes(fill = Color, y=Counts, x=ClonalRank)) +
+  geom_bar(stat="identity", width=0.6, color="black") + 
+  theme_bw() + 
+  #scale_fill_manual(values = ggplotColours(
+  #  n = length(
+  #    VDJ_clonal_expansion_out_vgene_combined %>% 
+  #      mutate(Color = sub("^([^0-9]+[0-9]).*", "\\1", Color)) %>%
+  #      select(Color) %>% unique() %>% pull()
+  #  )
+  #)) +
+  theme_classic() + 
+  #title(sample) + 
+  theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_continuous(expand = c(0,0.5)) + 
+  labs(x = "Clonal rank", y = "Number of cells") +
+  facet_wrap(sample~color_by, scales = "free_y", nrow=3) +
+  geom_text(aes(label = sample, x=25, y=Inf, vjust=1.5), check_overlap = TRUE) + 
+  #guides(
+  #  fill = guide_legend(title = "V-gene")
+  #) + 
+  theme(
+    strip.placement = "inside",
+    strip.text = element_blank(),
+    strip.background = element_blank()
+  )
+```
+
+```{, fig.width = 20}
+plot_VDJ_clonal_expansion_out_isotype_combined
+plot_VDJ_clonal_expansion_out_tissue_combined
+plot_VDJ_clonal_expansion_out_timepoint_combined
+
+plot_grid(plotlist = plot_VDJ_clonal_expansion_out_isotype_combined, plot_VDJ_clonal_expansion_out_tissue_combined, plot_VDJ_clonal_expansion_out_timepoint_combined, nrow=3, ncol=1)
+```
+
+# Antibody forest
+## packages
+```{r}
+bioc <- c("msa")
+
+for (j in bioc)
+{
+  print(j)
+  if (!require(j, character.only = TRUE)){
+    BiocManager::install(j, dependencies = TRUE)
+  }
+  library(j, character.only = TRUE)
+}
+```
+
+
+
+sourcing .R files
+```{r}
+# Load required libraries
+library(jsonlite)  # For processing JSON data
+library(httr)      # For making HTTP requests
+
+# Define the GitHub repository details
+repo_owner <- "alexyermanos"
+repo_name <- "AntibodyForests"
+folder_path <- "R"
+
+# Construct the GitHub API URL to fetch folder content
+api_url <- paste0("https://api.github.com/repos/", repo_owner, "/", repo_name, "/contents/", folder_path)
+
+# Fetch the folder content using the GitHub API
+response <- GET(api_url)
+
+# Check if the request was successful
+if (status_code(response) == 200) {
+  
+  # Parse the JSON response
+  files_info <- content(response, "text", encoding = "UTF-8")
+  files_info <- fromJSON(files_info)
+  
+  # Extract the raw URLs of all `.R` files
+  r_files <- files_info[grepl("\\.R$", files_info$name), "download_url"]
+  
+  # Source each R file
+  for (file_url in r_files) {
+    message("Sourcing file: ", file_url)
+    source(url(file_url))
+  }
+  
+  message("All files sourced successfully!")
+  
+} else {
+  stop("Failed to fetch folder content. HTTP status: ", status_code(response))
+}
+```
+
+```{r}
+head(vdj)
+colnames(vdj)
+```
+
+```{r}
+Af_build
+```
+
+
+```{r, message=FALSE}
+AF_vdj_default <- Af_build(VDJ = vdj,
+                           sequence.columns = c("VDJ_sequence_aa_trimmed"),
+                           germline.columns = c("VDJ_germline_aa_trimmed")
+                           )
+
+
+```
+
+```{r}
+saveRDS(AF_vdj_default, file="AF_vdj_default.rds")
+```
+
+```{r}
+head(AF_vdj_default)
+```
+
+
+## plot
+```{r}
+Af_plot_tree(AntibodyForests_object = AF_vdj_default,
+             sample = "368-01a",
+             clonotype = "clonotype1",
+             label.by = "name",
+             color.by = "isotype",
+             edge.label = "lv",
+             node.size = "expansion",
+             node.size.scale = c(10, 20),
+             main.title = "Lineage tree - Default algorithm",
+             sub.title = "368-01a - clonotype1"
+)
+```
+
+
+```{r}
+names(AF_vdj_default$`368-01a`$clonotype1$igraph)
+```
+
+
+```{r, fig.width=14}
+for (sample in names(AF_vdj_default)) {
+    #print(sample)
+    for (clonotype in head(names(AF_vdj_default[[sample]]),5)) {
+      Af_plot_tree(AntibodyForests_object = AF_vdj_default,
+                   sample = paste0(name),
+                   clonotype = paste0(clonotype),
+                   label.by = "name",
+                   color.by = "isotype",
+                   edge.label = "lv",
+                   node.size = "expansion",
+                   node.size.scale = c(10, 20),
+                   sub.title = "Lineage tree - Default algorithm",
+                   main.title = paste0(sample," - ",clonotype)
+      )
+    }
+  }
+```
+

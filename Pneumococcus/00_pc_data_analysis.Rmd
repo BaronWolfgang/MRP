@@ -1,0 +1,1650 @@
+---
+title: "Streptococcus pneumoniae data analysis"
+author: "Jan Paul van Meenen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+#Packages
+```{r}
+data_management_packages_to_install <- c("data.table", "tidyverse", "ggplot2", "readxl")
+
+packages_to_install <- c(data_management_packages_to_install)
+
+# Check and install packages using a for loop
+for (package in packages_to_install) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    install.packages(package)
+  }
+  library(package, character.only = TRUE)
+}
+```
+
+#Data Protein panel
+##loading
+```{r}
+data_proteinpanel <- rbind(
+    read_xlsx("data/20231124 Pneumococcal protein panel (with accession number)_SH_WM_FV.xlsx", range = "B3:M31"),
+    read_xlsx("data/20231124 Pneumococcal protein panel (with accession number)_SH_WM_FV.xlsx", range = "N3:Y30")
+    ) %>%
+  mutate(
+    "Protein class" = case_when(
+      `No.` < 24 ~ "Lipoproteins",
+      `No.` >= 24 & `No.` < 28 ~ "Cytoplasmic P.",
+      `No.` == 28 ~ "Membrane associated P.",
+      `No.` >= 29 & `No.` < 38 ~ "Choline-binding P.", 
+      `No.` >= 38 & `No.` < 46 ~ "Sortase-anchored P.",
+      `No.` == 46 ~ "NCSP",
+      TRUE ~ "Others"),
+    "Proteins (TIGR4)" = na_if(`Proteins (TIGR4)`, "-"),
+    "Proteins (D39)" = na_if(`Proteins (D39)`, "-")
+  )
+
+data_proteinpanel
+```
+```{r}
+colnames(data_proteinpanel)
+```
+
+
+```{r}
+data_proteinpanel %>%
+  select("Proteins (TIGR4)","AA sequence of recombinant protein")
+```
+
+# Create fasta    
+```{r}
+fasta_content <- apply(data_proteinpanel, 1, function(row) {
+  paste0(">", row["Proteins (TIGR4)"]," ", row["Protein class"], "\n", row["AA sequence of recombinant protein"])
+})
+
+writeLines(fasta_content, "sp_recombinant_protein_sequences.fasta")
+```
+
+```{r}
+cat(fasta_content)
+```
+
+#Data structure
+##loading
+```{r}
+data_structural <- read_xlsx("data/Pneumoproteins_PDB_structuralData.xlsx") %>%
+  rename_at(vars(3, 4), ~ c("Proteins (TIGR4) name", "Proteins (TIGR4)")) %>%
+  mutate(
+    "Protein class" = case_when(
+      `No.` < 24 ~ "Lipoproteins",
+      `No.` >= 24 & `No.` < 33 ~ "CPBs", 
+      `No.` >= 33 & `No.` < 41 ~ "Sortase-anchored P.",
+      `No.` >= 41 & `No.` < 45 ~ "Cytoplasmic P.",
+      `No.` == 45 ~ "Membrane associated P.",
+      `No.` == 46 ~ "NCSP",
+      TRUE ~ "Others"),
+    "Proteins (TIGR4)" = na_if(`Proteins (TIGR4)`, "-"),
+    "Proteins (D39)" = na_if(`Proteins (D39)`, "-")
+  )
+
+data_structural  
+```
+
+```{r}
+structural_packages_to_install <- c("bio3d","NGLVieweR")
+
+packages_to_install <- c(structural_packages_to_install)
+
+# Check and install packages using a for loop
+for (package in packages_to_install) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    install.packages(package)
+  }
+  library(package, character.only = TRUE)
+}
+```
+
+```{r}
+data_structural_with_pdb <- data_structural %>%
+  mutate(pdb_objects = map(
+    `PDB entry`,  # Column containing PDB entry IDs or file names
+    ~ if (!is.na(.x)) {
+      # Split the PDB entries if multiple IDs are present
+      pdb_list <- strsplit(.x, ",\\s*")[[1]]
+      
+      # Map over each PDB entry to read the corresponding PDB file
+      setNames(
+        map(pdb_list, function(pdb_entry) {
+          tryCatch(
+            {
+              # Read the PDB file using read.pdb
+              pdb_obj <- read.pdb(pdb_entry)
+              pdb_obj$pdb_entry <- pdb_entry
+              
+              write.pdb(pdb_obj, file = paste0("output/pdb/",pdb_entry, ".pdb"))
+              
+              return(pdb_obj)
+            },
+            error = function(e) {
+              message(paste("Error reading PDB file:", pdb_entry))  # Optionally print a message on error
+              return(NA)  # Return NA if an error occurs
+            }
+          )
+        }),
+        pdb_list  # Set the names of the list elements to be the PDB IDs
+      )
+    } else {
+      NA  # For rows where `PDB entry` is NA, return NA
+    }
+    
+    
+  )) 
+  
+```
+
+
+```{r}
+data_structural_with_pdb %>%
+  filter(!is.na(`PDB entry`)#,
+         #`Protein class` != "Others"
+         ) %>%
+  pull(pdb_objects) %>%
+  map(~ {
+    map(.x, function(pdb_object) {
+      # Check if pdb_object is a list and contains the necessary components
+      if (is.list(pdb_object) && !is.null(pdb_object$pdb_entry) && !is.null(pdb_object$seqres)) {
+        # Extract sequence information
+        fasta_header <- pdb_object$pdb_entry
+        fasta_sequence <- paste(aa321(pdb_object$seqres), collapse = "")
+        
+        # If both header and sequence are non-empty, return FASTA formatted string
+        if (nchar(fasta_header) > 0 && nchar(fasta_sequence) > 0) {
+          paste0(">", fasta_header, "\n", fasta_sequence)
+        } else {
+          # Print a message if either header or sequence is missing
+          message("Skipping empty PDB entry: ", pdb_object$pdb_entry)
+          return(NULL)  # Skip this entry
+        }
+      } else {
+        return(NULL)  # Return NA if invalid
+      }
+    })
+  }) %>%
+  unlist() %>%
+  writeLines("pdb_protein_sequences.fasta")
+```
+
+### split into parts
+Bepi-2.0 only allows for 50 proteins at a time.
+```{r}
+fasta_lines <- readLines("pdb_protein_sequences.fasta")
+
+# Group lines into proteins based on `>...` headers
+protein_entries <- split(fasta_lines, cumsum(grepl("^>", fasta_lines)))
+
+# Split protein entries into chunks of 50
+protein_chunks <- split(protein_entries, ceiling(seq_along(protein_entries) / 50))
+
+for (i in seq_along(protein_chunks)) {
+  # Combine lines for each chunk
+  chunk_lines <- unlist(protein_chunks[[i]])
+  
+  # Write the chunk to a new file
+  writeLines(chunk_lines, paste0("pdb_protein_sequences_part_", i, ".fasta"))
+}
+
+```
+
+
+# BepiPred-2.0 results:
+https://services.healthtech.dtu.dk/services/BepiPred-2.0/ 
+```{r}
+data_BepiPred_2 <- rbind(
+    read_csv("output/BepiPred2.0/BepiPred_part1_summary_67868578000F647FB45B7803.csv"),
+    read_csv("output/BepiPred2.0/BepiPred_part2_summary_67868580000F64B5DAEDC816.csv")
+    ) 
+
+data_BepiPred_2 %>%
+  filter(Entry == "3CX3") %>%
+  mutate(AminoAcid = aa123(AminoAcid))
+```
+
+## 3CX3 test
+### fixing alignment
+```{r}
+pdb_3CX3 <- read.pdb("3CX3", rm.alt = FALSE)
+
+aa321(pdb_3CX3$seqres)
+#pdb_3CX3$atom
+
+pdbseq(pdb_3CX3)
+```
+
+
+### checking alignment
+```{r, fig.width=14}
+pdb_3CX3$atom %>%
+  ggplot(aes(x=resno, y=chain, col = resid)) +
+  geom_vline(xintercept=34) +
+  geom_vline(xintercept=50) +
+  geom_vline(xintercept=100) +
+  geom_point() +
+  geom_point(data = data_BepiPred_2 %>% filter(Entry == "3CX3"),
+             aes(x=Position+27, col=aa123(AminoAcid), y="FASTA aligned")
+             ) +
+  geom_point(data = data_BepiPred_2 %>% filter(Entry == "3CX3"),
+             aes(x=Position, col=aa123(AminoAcid), y="FASTA")
+             ) +
+  scale_x_continuous(limits = c(NA,150)) +
+  #scale_y_discrete(expand = c(0,0)) +
+  theme_bw() 
+```
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("Biostrings")
+BiocManager::install("pwalign")
+#install.packages("pwalign")
+library("pwalign")
+```
+
+```{r}
+chr_list <- pdbseq(pdb_3CX3)
+chr_positions <- names(chr_list)
+chr_amino_acids_1 <- unname(chr_list)
+chr_amino_acids_3 <- aa123(chr_amino_acids_1)
+
+#n <- length(chr_amino_acids_3)
+
+chr_subset <- data.frame(Position = as.numeric(chr_positions),
+                         AminoAcid = chr_amino_acids_3) %>%
+  distinct(Position, .keep_all = TRUE)
+
+BepiPred_subset <- data_BepiPred_2 %>%
+  filter(Entry == "3CX3") 
+
+pattern_str <- chr_subset %>% 
+  mutate(AminoAcid = aa321(AminoAcid)) %>%
+  #replace_na(list(AminoAcid = "-")) %>%
+  pull(AminoAcid) %>%
+  str_c(collapse = "")
+
+bepi_str <- BepiPred_subset %>% 
+  pull(AminoAcid) %>%
+  str_c(collapse = "")
+
+alignment <- pairwiseAlignment(pattern_str, bepi_str)
+
+# Extract the aligned sequences
+aligned_pattern <- alignedPattern(alignment)
+
+#shift <- 0
+#while (substr(aligned_pattern, shift + 1, shift + 1) == "-") { #count the leading gaps
+#  shift <- shift + 1
+#}
+shift <- str_locate(as.character(aligned_pattern), "[^\\-]")[1]
+
+```
+
+```{r}
+starting_resno <- chr_subset$Position[1]
+
+required_adjustment <- starting_resno - shift
+
+BepiPred_subset <- BepiPred_subset %>%
+  mutate(resno = Position + required_adjustment) %>%
+  select(Entry, Position, resno, AminoAcid, EpitopeProbability)
+```
+
+
+
+
+### 3D plots
+```{r}
+highlight_data <- BepiPred_subset %>%
+  filter(resno >= min(chr_subset$Position), resno <= max(chr_subset$Position)) %>%
+  mutate(
+    EpiColor = ifelse(
+      EpitopeProbability <= 0.5,
+      "white",  # Assign white for probabilities below 0.6
+      colorRampPalette(c("#f0f8ff", "darkblue","black"))(10)[
+        pmin(pmax(round((EpitopeProbability - 0.5) / 0.05) + 1, 1), 10)
+      ]
+    )
+  ) 
+
+# Create the selection string as a space-separated string 
+selections <- paste0(highlight_data$resno, ":A")
+
+selection_str_base <- paste(selections[highlight_data$EpiColor == "white"], collapse = " ") #non-epitopes
+selection_str <- paste(selections[highlight_data$EpiColor != "white"], collapse = " ") #epitopes
+
+
+```
+
+```{r}
+viewer_3CX3 <- NGLVieweR("output/pdb/3CX3.pdb") %>%
+  addRepresentation("cartoon",
+    param = list(colorScheme = "residueindex", 
+                     sele = ":A")
+  ) %>%
+  addRepresentation(
+    "surface",  # Add surface representation once
+    param = list(
+      sele = selection_str_base,
+      colorValue = "white"
+    )
+  ) %>%
+ stageParameters(backgroundColor = "white") %>%
+   addRepresentation("label",
+    param = list(
+      sele = selection_str,
+      labelType = "format",
+      labelFormat = "[%(resname)s]%(resno)s",
+      labelGrouping = "residue", 
+      color = "black",
+      fontFamiliy = "sans-serif",
+      xOffset = 0,
+      yOffset = 0,
+      zOffset = 20,
+      fixedSize = TRUE,
+      radiusType = 1,
+      radiusSize = 1.5, # Label size
+      showBackground = FALSE
+      # backgroundColor="black",
+      # backgroundOpacity=0.5
+    )
+  ) 
+
+for (i in seq_len(nrow(highlight_data))) {
+  residue <- highlight_data$resno[i]  # Residue position
+  color <- highlight_data$EpiColor[i]  # Color based on EpitopeProbability
+  
+  if (color != "white") { # Add colored surface representation for each residue
+  viewer_3CX3 <- viewer_3CX3 %>%
+    addRepresentation(
+      "surface",
+      param = list(
+        sele = paste0(residue, ":A"),  # Select the specific residue (change chain if necessary)
+        colorValue = color  # Color based on the probability
+      )
+    ) }
+}
+
+viewer_3CX3
+```
+
+
+```{r}
+library("htmlwidgets")
+library("htmltools")
+
+saveWidget(viewer_3CX3, file = "output/snapshot/3CXC.html", title ="3CX3", selfcontained = TRUE)
+```
+
+### Heatmap
+```{r}
+pdb_entry <- "3CX3"
+
+pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+  
+required_adjustment <- map.seqresno.to.resno(pdb_object)
+  #print(required_adjustment)
+  
+resmap <- create.resmap.bepipred(pdb_object$atom, 
+                                           data_BepiPred_2 %>% filter(Entry == pdb_entry),
+                                           required_adjustment)
+
+resmap
+
+plot_bepipred <- resmap %>%
+  ggplot(aes(x=resno)) +
+  geom_tile(aes(y=0.1,fill = EpitopeProbability), height = 0.1) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0.5, limits = c(0, 1)) +  
+  theme_minimal() + 
+  theme(
+    axis.text.y = element_blank(),   
+    axis.title.y = element_blank(),  
+    axis.ticks.y = element_blank()
+  ) +
+  labs(fill = "BepiPred-2.0 prediction")
+
+plot_bepipred
+```
+
+## Generalized
+```{r}
+PDB_list <- data_structural_with_pdb %>%
+  pull(`PDB entry`) %>% 
+  na.omit() %>% 
+  str_split(", ") %>% 
+  unlist() %>% 
+  unique() 
+
+PDB_list
+```
+
+```{r}
+pdb_files_list <- sub("\\.pdb$", "",
+                      list.files(path = "output/pdb/", 
+                             pattern = "\\.pdb$")
+                      )
+
+for (pdb_entry in pdb_files_list) {
+  print(pdb_entry)
+
+}
+```
+
+### function map.seqresno.to.resno
+#### function map.seqposno.to.resno
+```{r}
+map.seqposno.to.resno <- function(sequence_AA1, pdb_object, verbose=FALSE, type="overlap") {
+  pattern <- pdbseq(pdb_object)
+  unique_pattern <- pattern[!duplicated(names(pattern))]
+  pattern_resno <- as.numeric(names(unique_pattern))
+  pattern_seq <- str_c(
+    unname(unique_pattern),
+    collapse = ""
+    )
+  
+  subject_seq <- sequence_AA1
+  
+  alignment <- pairwiseAlignment(pattern_seq, subject_seq, type=type)
+
+  # Extract the aligned sequences
+  aligned_pattern <- alignedPattern(alignment)
+  #first_10_residues_pattern <- substr(as.character(aligned_pattern), 1, 10)
+  residues_up_to_gap <- str_extract(as.character(aligned_pattern), "^[^-]*")
+  
+  shift <- str_locate(subject_seq, residues_up_to_gap)[1]
+  
+  if(is.na(shift)) {
+    warning("Missing sequence residue compared to pdb structure")
+    aligned_subject <- alignedSubject(alignment)
+    residues_up_to_gap <- str_extract(as.character(aligned_subject), "^[^-]*")
+    shift <- str_locate(subject_seq, residues_up_to_gap)[1]
+  }
+  
+  required_adjustment <- pattern_resno[1] - shift
+  
+  #verbose
+  if(verbose == TRUE) {
+    print(deparse(substitute(pdb_object)))
+    print(aligned_pattern)
+    print(alignedSubject(alignment)) 
+    print(residues_up_to_gap)
+    print(shift)
+  }
+  
+  return(c(required_adjustment))
+}
+
+```
+
+#### function map.seqresno.to.resno
+```{r}
+map.seqresno.to.resno <- function(pdb_object, verbose=FALSE, type="overlap") {
+  subject_seq <- str_c(
+    aa321(pdb_object$seqres),
+    collapse = ""
+    )
+  
+  required_adjustment <- map.seqposno.to.resno(subject_seq, pdb_object, verbose=verbose, type=type)
+  
+  return(c(required_adjustment))
+}
+```
+
+```{r}
+pdb_entry <- "3E0M"
+
+pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+pdbseq(pdb_object)
+aa321(pdb_object$seqres)
+  
+required_adjustment <- map.seqresno.to.resno(pdb_object, verbose = TRUE, type="overlap")
+print(required_adjustment)
+  
+resmap <- create.resmap.bepipred(pdb_object$atom, 
+                                           data_BepiPred_2 %>% filter(Entry == pdb_entry),
+                                           required_adjustment)
+
+resmap
+```
+
+
+### function prediction.viewer
+```{r, function prediction.viewer}
+prediction.viewer <- function(pdb_entry, directory, predictions_df=NULL) {
+  file_path <- paste0(directory,pdb_entry,".pdb")
+  view <- NGLVieweR(file_path) %>%
+  stageParameters(backgroundColor = "white", zoomSpeed = 1) %>%
+  addRepresentation("cartoon",
+    param = list(colorScheme = "residueindex", 
+                     sele = ":A")
+  ) 
+  
+  if(!is.null(predictions_df)) {
+    for (row in 1:nrow(predictions_df)) {
+      #print(predictions_df)
+      #print(predictions_df$resno_string[row])
+      #print(predictions_df$color[row])
+      view <- view %>%
+        addRepresentation(
+          "surface",  # Add surface representation once
+          param = list(
+            sele = predictions_df$resno_string[row],
+            colorValue = predictions_df$color[row]
+      )
+    )
+    } 
+    
+  }
+  
+  return(view)
+}
+
+```
+
+```{r}
+for (pdb_entry in pdb_files_list) {
+  print(pdb_entry)
+  prediction.viewer(pdb_entry, directory="output/pdb/")
+
+}
+```
+
+### function create.resmap.bepipred
+```{r}
+create.resmap.bepipred <- function(pdb_atom_df, bepipred_epitope_prediction_df,required_adjustment) {
+  resmap_df <- pdb_atom_df %>% 
+    select(resid,resno) %>%
+    unique() %>%
+    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+    left_join(bepipred_epitope_prediction_df %>%
+                #select(Position,AminoAcid,EpitopeProbability) %>%
+                mutate(resno = Position + required_adjustment),
+              by = c("resno")
+              )
+  return(resmap_df)
+}
+```
+
+## BepiPred-2.0 with resno
+```{r}
+data_BepiPred_2_with_resno <- NULL
+
+for (pdb_entry in pdb_files_list) {
+  print(pdb_entry)
+  
+  
+  pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+  
+  required_adjustment <- map.seqresno.to.resno(pdb_object)
+  #print(required_adjustment)
+  
+  resmap <- create.resmap.bepipred(pdb_object$atom, 
+                                           data_BepiPred_2 %>% filter(Entry == pdb_entry),
+                                           required_adjustment)
+  
+  if (is.null(data_BepiPred_2_with_resno)) {
+    data_BepiPred_2_with_resno <- resmap
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_BepiPred_2_with_resno <- rbind(data_BepiPred_2_with_resno, resmap)
+  }
+}
+
+data_BepiPred_2_with_resno
+```
+
+```{r}
+data_BepiPred_2 %>%
+  filter(Entry == "3E0M")
+```
+
+
+```{r}
+pdbs_path = "output/pdb/"
+
+for (pdb_entry in pdb_files_list) {
+  file_path = paste0(pdbs_path,pdb_entry,".pdb")
+  print(file_path)
+  #if(file.exists(file_path)) {
+  #  pdb_object <- read.pdb(file_path, rm.alt = FALSE)
+  #} else {
+  #print(paste0("file missing: ", pdb_entry))
+  #}
+  pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+  
+  required_adjustment <- map.seqresno.to.resno(pdb_object)
+  #print(required_adjustment)
+  
+  resmap <- create.resmap.bepipred(pdb_object$atom, 
+                                   data_BepiPred_2 %>% filter(Entry == pdb_entry),
+                                   required_adjustment)
+  print(resmap)
+  
+  color_map <- data.frame(
+    ProbabilityBin = levels(cut(seq(0.0, 1, by = 0.05), breaks = seq(0, 1, by = 0.05), include.lowest = TRUE)),
+    color = colorRampPalette(c("darkblue","white","red"))(20)
+    ) %>%
+    rbind(c(NA,"black"))
+  
+  #print(color_map)
+  
+  predictions_df <- resmap %>%
+    mutate(ProbabilityBin = cut(EpitopeProbability, 
+                              breaks = seq(0, 1, by = 0.05), 
+                              include.lowest = TRUE)
+    ) %>%
+    group_by(ProbabilityBin) %>% 
+    summarize(resno_list = list(paste0(resno,":A")), .groups = "drop") %>%
+    mutate(resno_string = sapply(resno_list, function(x) str_c(x, collapse = " "))) %>%
+    left_join(color_map)
+  
+  #print(predictions_df) 
+  
+  view <- prediction.viewer(pdb_entry, pdbs_path, predictions_df = predictions_df)
+  
+  saveWidget(view, file = paste0("output/snapshot/",pdb_entry,".html"), title=pdb_entry, selfcontained = TRUE)
+}
+```
+
+
+
+
+```{r}
+data_BepiPred_2 %>% filter(Entry == "8QLK")
+```
+
+```{r}
+levels(cut(seq(0.05, 1, by = 0.05), breaks = seq(0, 1, by = 0.05), include.lowest = TRUE))
+```
+
+
+```{r}
+library(viridisLite)
+my_palette <- inferno(20)
+my_palette <- colorRampPalette(c("blue","white","red"))(20)
+barplot(rep(1, length(my_palette)), col = my_palette, border = NA, axes=FALSE, space = 0, main = "Visualization of colorRampPalette")
+```
+
+```{r}
+# Create a mapping of bins to colors
+color_map <- data.frame(
+  ProbabilityBin = levels(cut(seq(0.05, 1, by = 0.05), breaks = seq(0, 1, by = 0.05), include.lowest = TRUE)),
+  color = inferno(20)
+)
+
+color_map
+```
+
+
+```{r}
+map.seqresno.to.resno(pdb_3CX3)
+
+map.seqresno.to.resno(read.pdb(paste0(pdbs_path,"3CX3",".pdb"),rm.alt = FALSE))
+```
+
+## Ggplot
+```{r}
+library("cowplot")
+```
+
+
+```{r, fig.width=14}
+plot_bepipred <- data_BepiPred_2 %>%
+  filter(Entry == "3CX3") %>%
+  ggplot(aes(x=Position)) +
+  geom_tile(aes(y=0.1,fill = EpitopeProbability), height = 0.1) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0.5, limits = c(0, 1)) +  
+  theme_minimal() + 
+  theme(
+    axis.text.y = element_blank(),   
+    axis.title.y = element_blank(),  
+    axis.ticks.y = element_blank()
+  ) +
+  labs(fill = "BepiPred-2.0 prediction")
+
+plot_surface <- data_BepiPred_2 %>%
+  filter(Entry == "3CX3") %>%
+  ggplot(aes(x=Position)) +
+  geom_tile(aes(y=0.1,fill = RelativeSurfaceAccessilibity), height = 0.1) +
+  theme_minimal() + 
+  theme(
+    axis.text.y = element_blank(),   
+    axis.title.y = element_blank(),  
+    axis.ticks.y = element_blank()
+  )
+
+plot_grid(
+  plot_bepipred + theme(
+    axis.text.x = element_blank(),   
+    axis.title.x = element_blank(),  
+    axis.ticks.x = element_blank()
+  ), 
+  plot_surface, align = "vh", ncol = 1)
+```
+
+# BepiPred-3.0 results
+https://services.healthtech.dtu.dk/services/BepiPred-3.0/
+```{r}
+data_BepiPred_3 <- rbind(
+    read_csv("output/BepiPred3.0/raw_output_part1.csv"),
+    read_csv("output/BepiPred3.0/raw_output_part2.csv")
+    ) %>%
+  #mutate(Residue = aa123(Residue)) %>%
+  group_by(Accession) %>%
+  mutate(Position = row_number())
+```
+
+```{r}
+data_BepiPred_3 %>%
+  filter(Accession == "3E0M") 
+```
+
+## BepiPred-3.0 with resno
+```{r}
+data_BepiPred_3_with_resno <- NULL
+
+for (pdb_entry in pdb_files_list) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+  
+  required_adjustment <- map.seqresno.to.resno(pdb_object)
+  #print(required_adjustment)
+  
+  resmap <- create.resmap.bepipred(pdb_object$atom, 
+                                           data_BepiPred_3 %>% filter(Accession == pdb_entry),
+                                           required_adjustment)
+  
+  if (is.null(data_BepiPred_3_with_resno)) {
+    data_BepiPred_3_with_resno <- resmap
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_BepiPred_3_with_resno <- rbind(data_BepiPred_3_with_resno, resmap)
+  }
+}
+
+data_BepiPred_3_with_resno
+```
+
+```{r}
+data_BepiPred_3_with_resno %>%
+  pull(`BepiPred-3.0 score`) %>%
+  summary()
+```
+
+
+# DiscoTope-3.0
+https://services.healthtech.dtu.dk/services/DiscoTope-3.0/
+```{r}
+library(purrr)
+library(readr)
+
+csv_files <- list.files("output/DiscoTope", pattern = "*.csv", full.names = TRUE)
+
+data_DiscoTope <- NULL
+
+for (csv_file in csv_files) {
+  temp_data <- read_csv(csv_file) 
+  
+  if (is.null(data_DiscoTope)) {
+    data_DiscoTope <- temp_data
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_DiscoTope <- rbind(data_DiscoTope, temp_data)
+  }
+}
+
+data_DiscoTope
+```
+
+```{r}
+data_DiscoTope %>%
+  filter(pdb == "3CX3")
+```
+
+## Test 3CX3
+```{r}
+data_DiscoTope <- data_DiscoTope %>%
+  mutate(pdb = sub("_.*", "", pdb)) %>%
+  rename("resno" = res_id)
+
+data_DiscoTope %>%
+  filter(pdb == "3CX3")
+
+data_BepiPred_2 %>%
+  filter(Entry == "3CX3")
+```
+
+
+```{r}
+plot_discotope <- data_DiscoTope %>%
+  filter(pdb == "3CX3") %>%
+  ggplot(aes(x=resno, y=calibrated_score, fill=calibrated_score)) +
+  geom_col(width = 1) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +  
+  theme_minimal() + 
+  theme(
+    axis.text.y = element_blank(),   
+    axis.title.y = element_blank(),  
+    axis.ticks.y = element_blank()
+  ) +
+  labs(fill = "DiscoTope-3.0 prediction")
+
+plot_discotope
+```
+
+# Epigraph
+http://epigraph.kaist.ac.kr/
+```{r}
+epigraph_zip_files <- list.files(path = "output/EpiGraph/", pattern = "\\.zip$")
+
+for (zip_file in epigraph_zip_files) {
+  unzip(zipfile = paste0("output/EpiGraph/",zip_file), exdir = "output/EpiGraph")
+}
+
+epigraph_csv_files <- list.files(path = "output/EpiGraph/", pattern = "\\.csv$")
+epigraph_csv_files
+```
+
+```{r}
+data_Epigraph <- NULL
+
+for (csv_file in epigraph_csv_files) {
+  temp_data <- read_csv(paste0("output/EpiGraph/",csv_file)) 
+  
+  if (is.null(data_Epigraph)) {
+    data_Epigraph <- temp_data
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_Epigraph <- rbind(data_Epigraph, temp_data)
+  }
+}
+
+data_Epigraph <- data_Epigraph %>% 
+  separate(Residue, into = c("chain", "resid", "resno"), sep = ":", convert = TRUE) %>%
+  mutate(PDB = toupper(PDB))
+
+data_Epigraph
+
+write.csv(data_Epigraph,"output/EpiGraph/data_Epigraph.csv", row.names=FALSE)
+```
+
+```{r}
+data_Epigraph %>%
+  count(chain) 
+```
+
+
+```{r}
+data_Epigraph_subset <- data_Epigraph %>% filter(PDB == "3ZPP")
+
+plot_epigraph <- data_Epigraph_subset %>% 
+    ggplot(aes(x=resno, y=Score, fill=Score)) +
+    geom_col(width = 1,) +
+    scale_fill_gradient2(low = "blue", mid = "gray95", high = "red") +  
+    theme_minimal() + 
+    theme(
+      axis.text.y = element_blank(),   
+      axis.title.y = element_blank(),  
+      axis.ticks.y = element_blank()
+    ) +
+    labs(fill = "EpiGraph prediction")
+
+plot_epigraph
+```
+
+#GraphBepi
+```{r}
+
+```
+
+
+
+# Plot all together
+```{r, warning=FALSE, fig.width=14, fig.height=10}
+for (pdb_entry in pdb_files_list) {
+  #print(pdb_entry)
+  
+  data_BepiPred_2_with_resno_subset <- data_BepiPred_2_with_resno %>% filter(Entry == pdb_entry)
+  #print(data_BepiPred_2_with_resno_subset)
+  
+  plot_bepipred_2_RSA <- data_BepiPred_2_with_resno_subset %>% 
+    ggplot(aes(x=resno, y=RelativeSurfaceAccessilibity, fill=RelativeSurfaceAccessilibity)) +
+    geom_col(width = 1) +  
+    scale_fill_gradient2(low = "darkcyan", mid = "gray95", high = "deeppink4", midpoint = 0.5, limits = c(0, 1)) +  
+    theme_minimal() + 
+    theme(
+      axis.text.y = element_blank(),   
+      axis.title.y = element_blank(),  
+      axis.ticks.y = element_blank()
+    ) +
+    labs(fill = "Relative Surface Accessilibity\n(NetsurfP)")
+  
+  
+  plot_bepipred_2 <- data_BepiPred_2_with_resno_subset %>% 
+    ggplot(aes(x=resno, y=EpitopeProbability, fill=EpitopeProbability)) +
+    geom_col(width = 1) +  
+    scale_fill_gradient2(low = "blue", mid = "gray95", high = "red", midpoint = 0.5, limits = c(0, 1)) +  
+    theme_minimal() + 
+    theme(
+      axis.text.y = element_blank(),   
+      axis.title.y = element_blank(),  
+      axis.ticks.y = element_blank()
+    ) +
+    labs(fill = "BepiPred-2.0 prediction")
+  #print(plot_bepipred_2)
+  
+  data_BepiPred_3_with_resno_subset <- data_BepiPred_3_with_resno %>% filter(Accession == pdb_entry)
+  median_BepiPred_3_subset_score <- median(data_BepiPred_3_with_resno_subset$`BepiPred-3.0 score`)
+  
+  plot_bepipred_3 <- data_BepiPred_3_with_resno_subset %>%
+    ggplot(aes(x=resno, y=`BepiPred-3.0 score`, fill=`BepiPred-3.0 score`)) +
+    geom_col(width = 1) +
+    scale_fill_gradient2(low = "blue", mid = "gray95", high = "red", 
+                         midpoint = median_BepiPred_3_subset_score#, 
+                         #limits = c(0, NA)
+                         ) +
+    theme_minimal() + 
+    theme(
+      axis.text.y = element_blank(),   
+      axis.title.y = element_blank(),  
+      axis.ticks.y = element_blank()
+    ) +
+    labs(fill = "BepiPred-3.0 prediction")
+  
+  data_DiscoTope_subset <- data_DiscoTope %>% filter(pdb == pdb_entry)
+  #print(data_DiscoTope_subset)
+  plot_discotope <- data_DiscoTope_subset %>% 
+    ggplot(aes(x=resno, y=calibrated_score, fill=calibrated_score)) +
+    geom_col(width = 1) +
+    scale_fill_gradientn(colors = c("blue", "gray95", "#FFC0C0", "#FF7070", "red"), 
+                         values = scales::rescale(c(-1, 0, 0.4, 0.9, 1.5), to = c(0, 1)),
+                         limits = c(-1, 1.5),
+                         oob = scales::squish
+                         ) +  
+    theme_minimal() + 
+    theme(
+      axis.text.y = element_blank(),   
+      axis.title.y = element_blank(),  
+      axis.ticks.y = element_blank()
+    ) +
+    labs(fill = "DiscoTope-3.0 prediction")
+  #print(plot_discotope)
+  
+  plot_discotope_RSA <- data_DiscoTope_subset %>% 
+    ggplot(aes(x=resno, y=rsa, fill=rsa)) +
+    geom_col(width = 1) +
+    scale_fill_gradient2(low = "darkcyan", mid = "gray95", high = "deeppink4", midpoint = 0.5, limits = c(0, 1)) +  
+    theme_minimal() + 
+    theme(
+      axis.text.y = element_blank(),   
+      axis.title.y = element_blank(),  
+      axis.ticks.y = element_blank()
+    ) +
+    labs(fill = "Relative surface accessibility\n(Shrake-Rupley)")
+  #print(plot_discotope)
+  
+  limit_lower <- data_DiscoTope_subset %>% pull(resno) %>% min(na.rm = TRUE)
+  limit_upper <- data_DiscoTope_subset %>% pull(resno) %>% max(na.rm = TRUE)
+  
+  data_Epigraph_subset <- data_Epigraph %>% filter(PDB == pdb_entry)
+  
+  plot_epigraph <- data_Epigraph_subset %>% 
+    ggplot(aes(x=resno, y=Score, fill=Score)) +
+    geom_col(width = 1,) +
+    scale_fill_gradient2(low = "blue", mid = "gray95", high = "red") +  
+    theme_minimal() + 
+    theme(
+      axis.text.y = element_blank(),   
+      axis.title.y = element_blank(),  
+      axis.ticks.y = element_blank()
+    ) +
+    labs(fill = "EpiGraph prediction")
+  
+  #Make the full figures
+  figure <- plot_grid(
+    plot_bepipred_2_RSA + scale_x_continuous(limits = c(limit_lower,limit_upper)) +
+      theme(
+        axis.ticks = element_blank(),  
+        axis.ticks.x = element_blank(),  
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_blank(),  
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+      ) +
+      labs(title = paste0(pdb_entry)), 
+    
+    plot_bepipred_2 + scale_x_continuous(limits = c(limit_lower,limit_upper)) +
+      theme(
+        axis.ticks = element_blank(),  
+        axis.ticks.x = element_blank(),  
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_blank(),  
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+      ), 
+    
+    plot_bepipred_3 + scale_x_continuous(limits = c(limit_lower,limit_upper)) +
+      theme(
+        axis.ticks = element_blank(),  
+        axis.ticks.x = element_blank(),  
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_blank(),  
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+      ),
+    
+    plot_discotope + scale_x_continuous(limits = c(limit_lower,limit_upper)) + 
+      theme(
+        axis.ticks = element_blank(),  
+        axis.ticks.x = element_blank(),  
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_blank(),  
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+      ),
+    
+    plot_discotope_RSA + scale_x_continuous(limits = c(limit_lower,limit_upper)) + 
+      theme(
+        axis.ticks = element_blank(),  
+        axis.ticks.x = element_blank(),  
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_blank(),  
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+      ),
+    
+    plot_epigraph + scale_x_continuous(limits = c(limit_lower,limit_upper)) + 
+      theme(
+        axis.ticks = element_blank(),  
+        #axis.ticks.x = element_blank(),  
+        axis.ticks.y = element_blank(),
+        #axis.text.x = element_blank(),  
+        axis.text.y = element_blank(),
+        #axis.title.x = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+      ),
+    
+    align = "v", ncol = 1)
+  
+  print(figure)
+  
+  ggsave(filename = paste0("output/figures/tracks/", pdb_entry, ".png"), 
+       plot = figure, 
+       width = 14, height = 10, dpi = 300,
+       bg="white")
+
+}
+```
+
+## As heatmap
+```{r}
+toupper(AMINO_ACID_CODE)
+```
+
+
+```{r}
+data_BepiPred_2_with_resno %>%
+  select(Entry,resno,resid,EpitopeProbability,RelativeSurfaceAccessilibity) %>%
+  rename("PDB" = Entry,
+         "BepiPred-2.0 probability" = EpitopeProbability,
+         "RSA NetsurfP" = RelativeSurfaceAccessilibity) %>%
+  filter(resid %in% toupper(AMINO_ACID_CODE))
+```
+
+```{r}
+data_BepiPred_3_with_resno %>%
+  select(Accession, resno, resid, `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`) %>%
+  rename("PDB" = Accession) %>%
+  filter(resid %in% toupper(AMINO_ACID_CODE))
+```
+
+```{r}
+data_DiscoTope %>%
+  select(pdb, chain, resno, residue, `DiscoTope-3.0_score`, calibrated_score, rsa) %>%
+  distinct(pdb, resno, .keep_all = TRUE) %>%
+  mutate(residue = aa123(residue)) %>%
+  rename("PDB" = pdb,
+         "resid" = residue,
+         "RSA Shrake-Rupley" = rsa,
+         "DiscoTope-3.0_calibrated_score" = calibrated_score)
+```
+
+```{r}
+data_Epigraph %>%
+  select(PDB, chain, resno, resid, Score) %>%
+  distinct(PDB, resno, .keep_all = TRUE) %>%
+  rename("Epigraph_score" = Score)
+```
+
+```{r}
+data_predictions <- left_join(
+  data_BepiPred_2_with_resno %>%
+  select(Entry,resno,resid,EpitopeProbability,RelativeSurfaceAccessilibity) %>%
+  rename("PDB" = Entry,
+         "BepiPred-2.0 probability" = EpitopeProbability,
+         "RSA NetsurfP" = RelativeSurfaceAccessilibity) %>%
+  filter(resid %in% toupper(AMINO_ACID_CODE))
+  ,
+  
+  data_BepiPred_3_with_resno %>%
+    select(Accession, resno, resid, `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`) %>%
+    rename("PDB" = Accession) %>%
+    filter(resid %in% toupper(AMINO_ACID_CODE))
+) %>%
+  left_join(
+    data_DiscoTope %>%
+      select(pdb, chain, resno, residue, `DiscoTope-3.0_score`, calibrated_score, rsa) %>%
+      distinct(pdb, resno, .keep_all = TRUE) %>%
+      mutate(residue = aa123(residue)) %>%
+      rename("PDB" = pdb,
+             "resid" = residue,
+             "RSA Shrake-Rupley" = rsa,
+             "DiscoTope-3.0_calibrated_score" = calibrated_score)
+    
+  ) %>%
+  left_join(
+    data_Epigraph %>%
+      select(PDB, chain, resno, resid, Score) %>%
+      distinct(PDB, resno, .keep_all = TRUE) %>%
+      rename("Epigraph_score" = Score),
+    by = c("PDB","resno","resid")
+  )
+
+data_predictions
+```
+
+```{r}
+library(scales)
+
+data_predictions_normalized <- data_predictions %>%
+  group_by(PDB) %>%
+  mutate(
+    across(
+      c(`BepiPred-3.0 score` , `BepiPred-3.0 linear epitope score`, 
+        `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, Epigraph_score), 
+      rescale
+    )
+  ) %>%
+  ungroup() %>%
+  na.omit()
+
+data_predictions_normalized
+```
+
+```{r}
+data_Epigraph %>%
+      select(PDB, chain, resno, resid, Score) %>%
+      distinct(PDB, resno, .keep_all = TRUE) %>%
+      rename("Epigraph_score" = Score) %>%
+  filter(PDB == "6YAG")
+```
+
+```{r}
+data_predictions %>%
+  filter(PDB == "6YAG")
+
+data_predictions_normalized %>%
+  filter(PDB == "6YAG")
+```
+
+
+```{r, fig.width = 14}
+library(pheatmap)
+
+data_test_wide <- data_predictions_normalized %>%
+  filter(PDB == "6YAG") %>%
+  select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+        `DiscoTope-3.0_calibrated_score`, Epigraph_score) %>%
+  column_to_rownames("resno") %>%
+  na.omit() %>%
+  as.data.frame()
+
+pheatmap(t(data_test_wide), 
+         cluster_rows = TRUE,         
+         cluster_cols = FALSE,         
+         main = "6YAG", 
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         labels_col = "resno",
+         clustering_distance_rows = "correlation") 
+```
+
+```{r, fig.width = 14}
+for (pdb_entry in unique(data_predictions_normalized$PDB)) {
+  data_predictions_normalised_subset_wide <- data_predictions_normalized %>%
+  filter(PDB == pdb_entry) %>%
+  distinct(resno, .keep_all = TRUE) %>%
+  select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+        `DiscoTope-3.0_calibrated_score`, Epigraph_score) %>%
+  column_to_rownames("resno") %>%
+  na.omit() %>%
+  as.data.frame()
+
+  figure <- pheatmap(t(data_predictions_normalised_subset_wide), 
+         cluster_rows = TRUE,         
+         cluster_cols = FALSE,         
+         main = paste0(pdb_entry), 
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         labels_col = "resno",
+         clustering_distance_rows = "correlation") 
+  
+  print(figure)
+  
+  ggsave(filename = paste0("output/figures/heatmap/", pdb_entry, "_heatmap.png"), 
+       plot = figure, 
+       width = 14, height = 10, dpi = 300,
+       bg="white")
+}
+```
+
+
+## 3D
+### bepipred-3.0
+```{r}
+pdbs_path = "output/pdb/"
+
+for (pdb_entry in pdb_files_list) {
+  file_path = paste0(pdbs_path,pdb_entry,".pdb")
+  print(file_path)
+
+  pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+  
+  data_BepiPred_3_with_resno_subset <- data_BepiPred_3_with_resno %>% filter(Accession == pdb_entry)
+  min_score <- min(data_BepiPred_3_with_resno_subset$`BepiPred-3.0 score`, na.rm = TRUE)
+  median_score <- median(data_BepiPred_3_with_resno_subset$`BepiPred-3.0 score`, na.rm = TRUE)
+  max_score <- max(data_BepiPred_3_with_resno_subset$`BepiPred-3.0 score`, na.rm = TRUE)
+  
+  
+  low_to_median <- colorRampPalette(c("blue", "gray95"))(10)
+  median_to_high <- colorRampPalette(c("gray95", "red"))(10)
+  
+  breaks <- seq(min_score, max_score, length.out = 21)  # 20 intervals
+  colors <- c(low_to_median, median_to_high)  # 20 colors
+  
+  color_map <- data.frame(
+    ProbabilityBin = cut(seq(min_score, max_score, length.out = 20), 
+                         breaks = breaks, include.lowest = TRUE),
+    color = colors
+  ) %>%
+  rbind(c(NA,"black"))
+  
+  predictions_df <- data_BepiPred_3_with_resno_subset %>%
+    mutate(ProbabilityBin = cut(`BepiPred-3.0 score`, 
+                                breaks = breaks, include.lowest = TRUE)
+    ) %>%
+    group_by(ProbabilityBin) %>% 
+    summarize(resno_list = list(paste0(resno,":A")), .groups = "drop") %>%
+    mutate(resno_string = sapply(resno_list, function(x) str_c(x, collapse = " "))) %>%
+    left_join(color_map)
+  
+  view <- prediction.viewer(pdb_entry, pdbs_path, predictions_df = predictions_df)
+  
+  #print(view)
+  
+  saveWidget(view, file = paste0("output/BepiPred3.0/snapshot/",pdb_entry,"_bepipred3.html"), title=pdb_entry, selfcontained = TRUE)
+}
+```
+
+
+### discotope-3.0
+```{r}
+pdbs_path = "output/pdb/"
+
+for (pdb_entry in pdb_files_list) {
+  file_path = paste0(pdbs_path,pdb_entry,".pdb")
+  print(file_path)
+
+  pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+  
+  data_DiscoTope_subset <- data_DiscoTope %>% filter(pdb == pdb_entry)
+  min_score <- min(data_DiscoTope_subset$calibrated_score, na.rm = TRUE)
+  median_score <- median(data_DiscoTope_subset$calibrated_score, na.rm = TRUE)
+  max_score <- max(data_DiscoTope_subset$calibrated_score, na.rm = TRUE)
+  
+  
+  low_to_median <- colorRampPalette(c("blue", "gray95"))(10)
+  median_to_high <- colorRampPalette(c("gray95", "red"))(10)
+  
+  breaks <- seq(min_score, max_score, length.out = 21)  # 20 intervals
+  colors <- c(low_to_median, median_to_high)  # 20 colors
+  
+  color_map <- data.frame(
+    ProbabilityBin = cut(seq(min_score, max_score, length.out = 20), 
+                         breaks = breaks, include.lowest = TRUE),
+    color = colors
+  ) %>%
+  rbind(c(NA,"black"))
+  
+  predictions_df <- data_DiscoTope_subset %>%
+    mutate(ProbabilityBin = cut(calibrated_score, 
+                                breaks = breaks, include.lowest = TRUE)
+    ) %>%
+    group_by(ProbabilityBin) %>% 
+    summarize(resno_list = list(paste0(resno,":A")), .groups = "drop") %>%
+    mutate(resno_string = sapply(resno_list, function(x) str_c(x, collapse = " "))) %>%
+    left_join(color_map)
+  
+  view <- prediction.viewer(pdb_entry, pdbs_path, predictions_df = predictions_df)
+  
+  #print(view)
+  
+  saveWidget(view, file = paste0("output/DiscoTope/snapshot/",pdb_entry,"_discotope3.html"), title=pdb_entry, selfcontained = TRUE)
+}
+```
+
+# Variability
+## AmiA
+```{,don't work }
+install.packages("seqinr")
+library("seqinr")
+library("read.gb")
+
+BiocManager::install("genbankr", dependencies=TRUE)
+install.packages("genbankr", repos = "https://bioconductor.org/packages/3.17/bioc")
+library("genbankr")
+
+gb_data_AmiA <- read.gb("data/6. AmiA.gb")
+```
+
+
+```{r}
+gb_lines_AmiA <- readLines("data/6. AmiA.gb")
+head(gb_lines_AmiA, 20)
+```
+
+```{r}
+origin_indices <- grep("^ORIGIN", gb_lines_AmiA)
+end_indices <- grep("^//", gb_lines_AmiA)
+header_prefix <- "AmiA"
+
+fasta_content <- list()
+
+for(i in 1:length(origin_indices)) {
+  start_index <- origin_indices[i] + 2
+  end_index <- end_indices[i] - 1
+  
+  protein_sequence_raw <- gb_lines_AmiA[start_index:end_index] 
+  
+  protein_sequence <- protein_sequence_raw %>%
+    gsub("[0-9]+", "", .) %>%
+    gsub("\\s+", "", .) %>%
+    paste(collapse = "")
+  
+  header_line <- gb_lines_AmiA[grep("^TITLE", gb_lines_AmiA)[i]]
+  header <- sub("^TITLE\\s+", "", header_line)
+
+  fasta_content[[i]] <- paste0(">",header_prefix,"_", header, "\n", protein_sequence)
+}
+
+writeLines(unlist(fasta_content), "output/AmiA_sequences.fasta")
+```
+
+### multiple sequence alignment
+```{r}
+AmiA_sequences <- readAAStringSet("output/AmiA_sequences.fasta")
+AmiA_sequences
+```
+
+```{r}
+library("msa")
+```
+
+
+```{r}
+AmiA_alignment <- msa(AmiA_sequences)
+```
+
+```{r}
+AmiA_alignment
+```
+
+
+```{r}
+print(AmiA_alignment, show="complete")
+```
+
+#### ggmsa
+```{}
+if (!requireNamespace("devtools", quietly=TRUE))
+    install.packages("devtools")
+devtools::install_github("YuLab-SMU/ggmsa")
+
+library(ggmsa)
+```
+
+```{}
+AmiA_sequences %>% 
+  ggmsa()
+```
+
+#### ggseqlogo
+```{r}
+install.packages("ggseqlogo")  
+library(ggseqlogo)
+```
+
+```{r, fig.width= 50}
+#AmiA_alignment_matrix
+
+seq_vector <- apply(AmiA_alignment_matrix, 1, paste, collapse ="")
+
+names(seq_vector) <- paste0("Seq_", seq_along(seq_vector))
+
+ggseqlogo(seq_vector, method = "bits") + 
+  theme_minimal() +
+  ggtitle("Sequence Logo of AmiA Alignment")
+```
+
+
+### alignment matrix
+```{r}
+AmiA_alignment_matrix <- as.matrix(AmiA_alignment)
+
+AmiA_variability <- apply(AmiA_alignment_matrix, 2, function(col) {
+  length(unique(col))
+})
+
+AmiA_variability
+
+highly_variable_positions <- which(AmiA_variability == 2)
+
+highly_variable_positions
+length(highly_variable_positions)
+```
+
+```{r}
+dim(AmiA_alignment_matrix)
+```
+
+```{}
+#apply(AmiA_alignment_matrix, 2, function(col) {
+#  names(sort(table(col), decreasing = TRUE))
+#})
+
+#apply(AmiA_alignment_matrix, 2, function(col) {
+#  sort(table(col), decreasing = TRUE)
+#})
+```
+
+### data_variability
+```{r}
+consensus_seq <- unlist(strsplit(msaConsensusSequence(AmiA_alignment),""))
+
+variability_counts <- sapply(seq_len(ncol(AmiA_alignment_matrix)), function(i) {
+  sum(AmiA_alignment_matrix[, i] != consensus_seq[i] & AmiA_alignment_matrix[, i] != "-")
+})
+
+#mutation_counts
+
+total_sequences <- nrow(AmiA_alignment)
+
+variability_frequencies <- variability_counts / total_sequences
+
+data_variability_AmiA <- data.frame(
+  Position = 1:length(variability_counts),
+  Consensus_residue = consensus_seq,
+  Variability_counts = variability_counts,
+  Variability_frequency = variability_frequencies
+)
+
+data_variability_AmiA
+
+```
+
+```{r}
+data_variability_AmiA %>%
+  ggplot(aes(x=Position, y=Variability_counts)) +
+  geom_col(width = 1) +
+  theme_minimal()
+```
+
+
+### consensus matrix
+```{r}
+AmiA_consensus_matrix <- consensusMatrix(AmiA_alignment)
+AmiA_consensus_matrix
+```
+
+
+```{r}
+library("tinytex")
+
+tinytex::tlmgr_install("pdflatex")
+library("pdflatex")
+```
+
+
+```{r}
+msaPrettyPrint(AmiA_alignment, output="asis", y=c(164, 213), showNames="none", showLogo="none", askForOverwrite=FALSE)
+```
+
+## (WIP) matching AmiA consensus to to epitope predictions
+AmiA corresponds to pdb entries 8A42, 8QM0
+```{r}
+data.frame(Consensus_Residue = unlist(strsplit(msaConsensusSequence(AmiA_alignment), "")),
+           Position = seq_along(unlist(strsplit(msaConsensusSequence(AmiA_alignment), ""))))
+```
+
+
+```{r}
+pdb_object <- read.pdb("8A42")
+
+required_adjustment <- map.seqposno.to.resno(sequence_AA1 = msaConsensusSequence(AmiA_alignment), pdb_object = pdb_object, verbose = TRUE)
+required_adjustment
+```
+
+```{r}
+pdb_object$atom %>%
+  filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+  ggplot(aes(x=resno, y=chain, col = resid)) +
+  geom_vline(xintercept=34) +
+  geom_vline(xintercept=50) +
+  geom_vline(xintercept=100) +
+  geom_point() +
+  geom_point(data = data_variability_AmiA ,
+             aes(x=Position, col=aa123(Consensus_residue), y="FASTA")
+             ) +
+  scale_x_continuous(limits = c(NA,50)) +
+  #scale_y_discrete(expand = c(0,0)) +
+  theme_bw() 
+```
+
+
+#### mutations_data_with_resno
+```{r}
+data_variability_AmiA
+
+pdb_entry <- "8A42"
+
+pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+
+required_adjustment <- map.seqposno.to.resno(sequence_AA1 = msaConsensusSequence(AmiA_alignment), pdb_object = pdb_object)
+
+data_variability_AmiA_with_resno_8A42 <- create.resmap.bepipred(pdb_object$atom, 
+                                 data_variability_AmiA,
+                                 required_adjustment)
+
+data_variability_AmiA_with_resno_8A42
+
+
+```
+
+```{r}
+data_predictions_with_variability <- data_predictions %>%
+  filter(PDB == "8A42") %>%
+  left_join(data_variability_AmiA_with_resno_8A42 %>% select(resid, resno, Variability_counts, Variability_frequency),
+            by = c("resno", "resid"))
+
+data_predictions_with_variability
+```
+
+```{r}
+names(data_predictions)
+```
+
+
+```{r, fig.width = 14}
+data_predictions_with_variability %>%
+  pivot_longer(cols = c(
+    `BepiPred-2.0 probability`, `RSA NetsurfP`, `BepiPred-3.0 score`,
+    `BepiPred-3.0 linear epitope score`, `DiscoTope-3.0_score`,
+    `DiscoTope-3.0_calibrated_score`, `RSA Shrake-Rupley`, `Epigraph_score`, Variability_frequency
+  ), names_to = "Score_Type", values_to = "Score_Value") %>%
+  ggplot(aes(x=resno)) +
+  geom_col(aes(y=Score_Value)) +
+  
+  geom_text(aes(label = Score_Type, x = (min(resno) + (max(resno) - min(resno))/2)), color = "black",y = Inf, vjust = 1.5, size = 4, family = "Arial", check_overlap = TRUE) +
+  
+  facet_wrap(~Score_Type, ncol = 1, scales = "free_y") +
+  theme_minimal() +
+  theme(strip.text = element_blank())
+```
+
+```{r}
+data_predictions_with_variability_normalized <- data_predictions_with_variability %>%
+  group_by(PDB) %>%
+  mutate(
+    across(
+      c(`BepiPred-3.0 score` , `BepiPred-3.0 linear epitope score`, 
+        `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, Epigraph_score, Variability_frequency), 
+      rescale
+    )
+  ) %>%
+  ungroup() %>%
+  na.omit()
+
+data_predictions_with_variability_normalized
+```
+
+```{r}
+data_test_wide <- data_predictions_with_variability_normalized %>%
+  select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+        `DiscoTope-3.0_calibrated_score`, Epigraph_score, Variability_frequency) %>%
+  column_to_rownames("resno") %>%
+  na.omit() %>%
+  as.data.frame()
+
+pheatmap(t(data_test_wide), 
+         cluster_rows = TRUE,         
+         cluster_cols = FALSE,         
+         main = "8A42", 
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         labels_col = "resno",
+         clustering_distance_rows = "correlation") 
+```
+

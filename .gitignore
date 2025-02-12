@@ -1,0 +1,10 @@
+# Ignore specific data directories
+/Kim/data/
+/Kim/AF_vdj_default.rds
+/Pneumococcus/data/
+
+# Ignore output directory
+/Pneumococcus/output/
+
+# Ignore R history file
+/.Rhistory
