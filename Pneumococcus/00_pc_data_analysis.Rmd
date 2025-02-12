@@ -704,13 +704,13 @@ plot_discotope
 # Epigraph
 http://epigraph.kaist.ac.kr/
 ```{r}
-epigraph_zip_files <- list.files(path = "output/EpiGraph/", pattern = "\\.zip$")
+epigraph_zip_files <- list.files(path = "output/EpiGraph/individual_files/", pattern = "\\.zip$")
 
 for (zip_file in epigraph_zip_files) {
-  unzip(zipfile = paste0("output/EpiGraph/",zip_file), exdir = "output/EpiGraph")
+  unzip(zipfile = paste0("output/EpiGraph/individual_files/",zip_file), exdir = "output/EpiGraph/individual_files/")
 }
 
-epigraph_csv_files <- list.files(path = "output/EpiGraph/", pattern = "\\.csv$")
+epigraph_csv_files <- list.files(path = "output/EpiGraph/individual_files/", pattern = "\\.csv$")
 epigraph_csv_files
 ```
 
@@ -718,7 +718,8 @@ epigraph_csv_files
 data_Epigraph <- NULL
 
 for (csv_file in epigraph_csv_files) {
-  temp_data <- read_csv(paste0("output/EpiGraph/",csv_file)) 
+  temp_data <- read_csv(paste0("output/EpiGraph/individual_files/",csv_file)) 
+  print(csv_file)
   
   if (is.null(data_Epigraph)) {
     data_Epigraph <- temp_data
@@ -736,12 +737,6 @@ data_Epigraph
 
 write.csv(data_Epigraph,"output/EpiGraph/data_Epigraph.csv", row.names=FALSE)
 ```
-
-```{r}
-data_Epigraph %>%
-  count(chain) 
-```
-
 
 ```{r}
 data_Epigraph_subset <- data_Epigraph %>% filter(PDB == "3ZPP")
@@ -1262,20 +1257,6 @@ print(AmiA_alignment, show="complete")
 
 #### ggmsa
 
-#### ggseqlogo
-```{r, fig.width= 50}
-#AmiA_alignment_matrix
-
-seq_vector <- apply(AmiA_alignment_matrix, 1, paste, collapse ="")
-
-names(seq_vector) <- paste0("Seq_", seq_along(seq_vector))
-
-ggseqlogo(seq_vector, method = "bits") + 
-  theme_minimal() +
-  ggtitle("Sequence Logo of AmiA Alignment")
-```
-
-
 ### alignment matrix
 ```{r}
 AmiA_alignment_matrix <- as.matrix(AmiA_alignment)
@@ -1296,14 +1277,17 @@ length(highly_variable_positions)
 dim(AmiA_alignment_matrix)
 ```
 
-```{}
-#apply(AmiA_alignment_matrix, 2, function(col) {
-#  names(sort(table(col), decreasing = TRUE))
-#})
+#### ggseqlogo
+```{r, fig.width= 50}
+#AmiA_alignment_matrix
 
-#apply(AmiA_alignment_matrix, 2, function(col) {
-#  sort(table(col), decreasing = TRUE)
-#})
+seq_vector <- apply(AmiA_alignment_matrix, 1, paste, collapse ="")
+
+names(seq_vector) <- paste0("Seq_", seq_along(seq_vector))
+
+ggseqlogo(seq_vector, method = "bits") + 
+  theme_minimal() +
+  ggtitle("Sequence Logo of AmiA Alignment")
 ```
 
 ### data_variability
@@ -1462,5 +1446,92 @@ pheatmap(t(data_test_wide),
          color = colorRampPalette(c("blue", "white", "red"))(50),
          labels_col = "resno",
          clustering_distance_rows = "correlation") 
+```
+
+# Alphafold 3 structures
+Here we predict the alphafold 3 structures based on the recombinant sequences
+```{r}
+library(jsonlite)
+
+# Function to parse FASTA file and extract headers and sequences correctly
+parse_fasta <- function(fasta_file) {
+  if (!file.exists(fasta_file)) {
+    stop("Error: FASTA file does not exist at the specified path: ", fasta_file)
+  }
+  
+  fasta_lines <- readLines(fasta_file)  
+  sequences <- list()
+  
+  current_name <- NULL
+  current_sequence <- ""
+  
+  for (line in fasta_lines) {
+    if (startsWith(line, ">")) {  
+      if (!is.null(current_name)) {
+        
+        sequences <- append(sequences, list(list(name = current_name, sequence = current_sequence)))
+      }
+      current_name <- substr(line, 2, nchar(line))  
+      current_sequence <- ""  
+    } else {
+      current_sequence <- paste0(current_sequence, line)  
+    }
+  }
+  
+
+  if (!is.null(current_name)) {
+    sequences <- append(sequences, list(list(name = current_name, sequence = current_sequence)))
+  }
+  
+  return(sequences)
+}
+
+# Function to generate the correct JSON structure
+generate_json <- function(fasta_file) {
+  sequences <- parse_fasta(fasta_file)
+  
+  json_data <- lapply(sequences, function(seq_data) {
+
+    clean_name <- sub("([^(\\s]+)(\\s|\\().*", "\\1", seq_data$name)
+    clean_name <- gsub("\\s+", "", clean_name)
+    clean_name <- paste(clean_name, "recombinant protein")
+    
+    list(
+      name = as.character(clean_name),  
+      modelSeeds = list(),  
+      sequences = list(
+        list(
+          proteinChain = list(
+            sequence = as.character(seq_data$sequence),  
+            count = 1 
+          )
+        )
+      )
+    )
+  })
+  
+  return(json_data)
+}
+
+
+# Function to write the JSON data to a file
+write_json_file <- function(json_data, output_file) {
+  output_dir <- dirname(output_file)
+  
+  if (!dir.exists(output_dir)) {
+    dir.create(output_dir, recursive = TRUE)
+  }
+  
+  write_json(json_data, output_file, pretty = TRUE, auto_unbox = TRUE) #auto_unbox is very important as otherwise the Alphafoldserver will not except the .json
+}
+
+
+
+# Define input and output paths
+fasta_file <- "data/fasta/sp_recombinant_protein_sequences.fasta"
+output_json_file <- "output/AlphaFold3/sp_recombinant_protein_sequences.json"
+
+json_data <- generate_json(fasta_file)
+write_json_file(json_data, output_json_file)
 ```
 
