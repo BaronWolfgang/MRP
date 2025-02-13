@@ -110,7 +110,7 @@ data_structural
 ```
 
 
-
+## download all pdb's
 ```{r}
 data_structural_with_pdb <- data_structural %>%
   mutate(pdb_objects = map(
@@ -216,199 +216,8 @@ data_BepiPred_2 %>%
   mutate(AminoAcid = aa123(AminoAcid))
 ```
 
-## 3CX3 test
-### fixing alignment
-```{r}
-pdb_3CX3 <- read.pdb("3CX3", rm.alt = FALSE)
-
-aa321(pdb_3CX3$seqres)
-#pdb_3CX3$atom
-
-pdbseq(pdb_3CX3)
-```
-
-
-### checking alignment
-```{r, fig.width=14}
-pdb_3CX3$atom %>%
-  ggplot(aes(x=resno, y=chain, col = resid)) +
-  geom_vline(xintercept=34) +
-  geom_vline(xintercept=50) +
-  geom_vline(xintercept=100) +
-  geom_point() +
-  geom_point(data = data_BepiPred_2 %>% filter(Entry == "3CX3"),
-             aes(x=Position+27, col=aa123(AminoAcid), y="FASTA aligned")
-             ) +
-  geom_point(data = data_BepiPred_2 %>% filter(Entry == "3CX3"),
-             aes(x=Position, col=aa123(AminoAcid), y="FASTA")
-             ) +
-  scale_x_continuous(limits = c(NA,150)) +
-  #scale_y_discrete(expand = c(0,0)) +
-  theme_bw() 
-```
-
-```{r}
-chr_list <- pdbseq(pdb_3CX3)
-chr_positions <- names(chr_list)
-chr_amino_acids_1 <- unname(chr_list)
-chr_amino_acids_3 <- aa123(chr_amino_acids_1)
-
-#n <- length(chr_amino_acids_3)
-
-chr_subset <- data.frame(Position = as.numeric(chr_positions),
-                         AminoAcid = chr_amino_acids_3) %>%
-  distinct(Position, .keep_all = TRUE)
-
-BepiPred_subset <- data_BepiPred_2 %>%
-  filter(Entry == "3CX3") 
-
-pattern_str <- chr_subset %>% 
-  mutate(AminoAcid = aa321(AminoAcid)) %>%
-  #replace_na(list(AminoAcid = "-")) %>%
-  pull(AminoAcid) %>%
-  str_c(collapse = "")
-
-bepi_str <- BepiPred_subset %>% 
-  pull(AminoAcid) %>%
-  str_c(collapse = "")
-
-alignment <- pairwiseAlignment(pattern_str, bepi_str)
-
-# Extract the aligned sequences
-aligned_pattern <- alignedPattern(alignment)
-
-#shift <- 0
-#while (substr(aligned_pattern, shift + 1, shift + 1) == "-") { #count the leading gaps
-#  shift <- shift + 1
-#}
-shift <- str_locate(as.character(aligned_pattern), "[^\\-]")[1]
-
-```
-
-```{r}
-starting_resno <- chr_subset$Position[1]
-
-required_adjustment <- starting_resno - shift
-
-BepiPred_subset <- BepiPred_subset %>%
-  mutate(resno = Position + required_adjustment) %>%
-  select(Entry, Position, resno, AminoAcid, EpitopeProbability)
-```
-
-
-
-
-### 3D plots
-```{r}
-highlight_data <- BepiPred_subset %>%
-  filter(resno >= min(chr_subset$Position), resno <= max(chr_subset$Position)) %>%
-  mutate(
-    EpiColor = ifelse(
-      EpitopeProbability <= 0.5,
-      "white",  # Assign white for probabilities below 0.6
-      colorRampPalette(c("#f0f8ff", "darkblue","black"))(10)[
-        pmin(pmax(round((EpitopeProbability - 0.5) / 0.05) + 1, 1), 10)
-      ]
-    )
-  ) 
-
-# Create the selection string as a space-separated string 
-selections <- paste0(highlight_data$resno, ":A")
-
-selection_str_base <- paste(selections[highlight_data$EpiColor == "white"], collapse = " ") #non-epitopes
-selection_str <- paste(selections[highlight_data$EpiColor != "white"], collapse = " ") #epitopes
-
-
-```
-
-```{r}
-viewer_3CX3 <- NGLVieweR("output/pdb/3CX3.pdb") %>%
-  addRepresentation("cartoon",
-    param = list(colorScheme = "residueindex", 
-                     sele = ":A")
-  ) %>%
-  addRepresentation(
-    "surface",  # Add surface representation once
-    param = list(
-      sele = selection_str_base,
-      colorValue = "white"
-    )
-  ) %>%
- stageParameters(backgroundColor = "white") %>%
-   addRepresentation("label",
-    param = list(
-      sele = selection_str,
-      labelType = "format",
-      labelFormat = "[%(resname)s]%(resno)s",
-      labelGrouping = "residue", 
-      color = "black",
-      fontFamiliy = "sans-serif",
-      xOffset = 0,
-      yOffset = 0,
-      zOffset = 20,
-      fixedSize = TRUE,
-      radiusType = 1,
-      radiusSize = 1.5, # Label size
-      showBackground = FALSE
-      # backgroundColor="black",
-      # backgroundOpacity=0.5
-    )
-  ) 
-
-for (i in seq_len(nrow(highlight_data))) {
-  residue <- highlight_data$resno[i]  # Residue position
-  color <- highlight_data$EpiColor[i]  # Color based on EpitopeProbability
-  
-  if (color != "white") { # Add colored surface representation for each residue
-  viewer_3CX3 <- viewer_3CX3 %>%
-    addRepresentation(
-      "surface",
-      param = list(
-        sele = paste0(residue, ":A"),  # Select the specific residue (change chain if necessary)
-        colorValue = color  # Color based on the probability
-      )
-    ) }
-}
-
-viewer_3CX3
-```
-
-
-```{r}
-saveWidget(viewer_3CX3, file = "output/snapshot/3CXC.html", title ="3CX3", selfcontained = TRUE)
-```
-
-### Heatmap
-```{r}
-pdb_entry <- "3CX3"
-
-pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
-  
-required_adjustment <- map.seqresno.to.resno(pdb_object)
-  #print(required_adjustment)
-  
-resmap <- create.resmap.bepipred(pdb_object$atom, 
-                                           data_BepiPred_2 %>% filter(Entry == pdb_entry),
-                                           required_adjustment)
-
-resmap
-
-plot_bepipred <- resmap %>%
-  ggplot(aes(x=resno)) +
-  geom_tile(aes(y=0.1,fill = EpitopeProbability), height = 0.1) +
-  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0.5, limits = c(0, 1)) +  
-  theme_minimal() + 
-  theme(
-    axis.text.y = element_blank(),   
-    axis.title.y = element_blank(),  
-    axis.ticks.y = element_blank()
-  ) +
-  labs(fill = "BepiPred-2.0 prediction")
-
-plot_bepipred
-```
-
 ## Generalized
+### get valid all pdb entires and files
 ```{r}
 PDB_list <- data_structural_with_pdb %>%
   pull(`PDB entry`) %>% 
@@ -421,21 +230,15 @@ PDB_list
 ```
 
 ```{r}
+pdbs_path = "output/pdb/"
+
 pdb_files_list <- sub("\\.pdb$", "",
-                      list.files(path = "output/pdb/", 
+                      list.files(path = pdbs_path, 
                              pattern = "\\.pdb$")
                       )
 
 for (pdb_entry in pdb_files_list) {
   print(pdb_entry)
-
-}
-```
-
-```{r}
-for (pdb_entry in pdb_files_list) {
-  print(pdb_entry)
-  prediction.viewer(pdb_entry, directory="output/pdb/")
 
 }
 ```
@@ -447,8 +250,14 @@ data_BepiPred_2_with_resno <- NULL
 for (pdb_entry in pdb_files_list) {
   print(pdb_entry)
   
+  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb")
   
-  pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+  if (file.exists(pdb_file)) {
+    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+    print(pdb_file)
+  } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
   
   required_adjustment <- map.seqresno.to.resno(pdb_object)
   #print(required_adjustment)
@@ -467,12 +276,6 @@ for (pdb_entry in pdb_files_list) {
 
 data_BepiPred_2_with_resno
 ```
-
-```{r}
-data_BepiPred_2 %>%
-  filter(Entry == "3E0M")
-```
-
 
 ```{r}
 pdbs_path = "output/pdb/"
@@ -522,12 +325,6 @@ for (pdb_entry in pdb_files_list) {
 ```
 
 
-
-
-```{r}
-data_BepiPred_2 %>% filter(Entry == "8QLK")
-```
-
 ```{r}
 levels(cut(seq(0.05, 1, by = 0.05), breaks = seq(0, 1, by = 0.05), include.lowest = TRUE))
 ```
@@ -547,13 +344,6 @@ color_map <- data.frame(
 )
 
 color_map
-```
-
-
-```{r}
-map.seqresno.to.resno(pdb_3CX3)
-
-map.seqresno.to.resno(read.pdb(paste0(pdbs_path,"3CX3",".pdb"),rm.alt = FALSE))
 ```
 
 ## Ggplot
@@ -605,11 +395,6 @@ data_BepiPred_3 <- rbind(
   mutate(Position = row_number())
 ```
 
-```{r}
-data_BepiPred_3 %>%
-  filter(Accession == "3E0M") 
-```
-
 ## BepiPred-3.0 with resno
 ```{r}
 data_BepiPred_3_with_resno <- NULL
@@ -617,7 +402,14 @@ data_BepiPred_3_with_resno <- NULL
 for (pdb_entry in pdb_files_list) {
   print(pdb_entry)
   
-  pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
+  
+  if (file.exists(pdb_file)) {
+    print(pdb_file)
+    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+  } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
   
   required_adjustment <- map.seqresno.to.resno(pdb_object)
   #print(required_adjustment)
@@ -674,7 +466,7 @@ data_DiscoTope %>%
 ```{r}
 data_DiscoTope <- data_DiscoTope %>%
   mutate(pdb = sub("_.*", "", pdb)) %>%
-  rename("resno" = res_id)
+  rename(res_id ="resno" )
 
 data_DiscoTope %>%
   filter(pdb == "3CX3")
@@ -758,9 +550,30 @@ plot_epigraph
 
 #GraphBepi
 ```{r}
-
+data_DiscoTope %>%
+  filter(residue %in% names(AMINO_ACID_CODE)) %>%
+  select(pdb, chain, length) %>%
+  pivot_wider(names_from = chain, values_from = length) %>%
+  mutate(across(where(is.list), ~sapply(., function(x) ifelse(is.null(x), NA, length(x)))))
 ```
 
+```{r}
+for (pdb_entry in unique(data_DiscoTope$pdb)) {
+  print(pdb_entry)
+  data_DiscoTope_subset <- data_DiscoTope %>% filter(pdb == pdb_entry)
+  
+  
+  plot <- data_DiscoTope_subset %>%
+    ggplot(aes(x=resno, colour = residue)) +
+    geom_point(aes(y=1)) +
+    facet_wrap(~chain,ncol = 1) +
+    labs(title=paste0(pdb_entry)) +
+    theme_minimal()
+  
+  
+  print(plot)
+}
+```
 
 
 # Plot all together
@@ -951,159 +764,140 @@ for (pdb_entry in pdb_files_list) {
 }
 ```
 
-## As heatmap
+## create joined predictions df
 ```{r}
-toupper(AMINO_ACID_CODE)
-```
-
-
-```{r}
-data_BepiPred_2_with_resno %>%
-  select(Entry,resno,resid,EpitopeProbability,RelativeSurfaceAccessilibity) %>%
-  rename("PDB" = Entry,
-         "BepiPred-2.0 probability" = EpitopeProbability,
-         "RSA NetsurfP" = RelativeSurfaceAccessilibity) %>%
-  filter(resid %in% toupper(AMINO_ACID_CODE))
-```
-
-```{r}
-data_BepiPred_3_with_resno %>%
-  select(Accession, resno, resid, `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`) %>%
-  rename("PDB" = Accession) %>%
-  filter(resid %in% toupper(AMINO_ACID_CODE))
-```
-
-```{r}
-data_DiscoTope %>%
-  select(pdb, chain, resno, residue, `DiscoTope-3.0_score`, calibrated_score, rsa) %>%
-  distinct(pdb, resno, .keep_all = TRUE) %>%
-  mutate(residue = aa123(residue)) %>%
-  rename("PDB" = pdb,
-         "resid" = residue,
-         "RSA Shrake-Rupley" = rsa,
-         "DiscoTope-3.0_calibrated_score" = calibrated_score)
-```
-
-```{r}
-data_Epigraph %>%
-  select(PDB, chain, resno, resid, Score) %>%
-  distinct(PDB, resno, .keep_all = TRUE) %>%
-  rename("Epigraph_score" = Score)
-```
-
-```{r}
-data_predictions <- left_join(
+data_predictions_sequencebased <- full_join(
   data_BepiPred_2_with_resno %>%
-  select(Entry,resno,resid,EpitopeProbability,RelativeSurfaceAccessilibity) %>%
-  rename("PDB" = Entry,
-         "BepiPred-2.0 probability" = EpitopeProbability,
-         "RSA NetsurfP" = RelativeSurfaceAccessilibity) %>%
-  filter(resid %in% toupper(AMINO_ACID_CODE))
+    mutate(PDB = Entry,
+           `BepiPred-2.0 probability` = EpitopeProbability,
+           `RSA NetsurfP` = RelativeSurfaceAccessilibity) %>%
+    select(PDB, chain, resno,resid,`BepiPred-2.0 probability`,`RSA NetsurfP`) %>%
+    filter(resid %in% toupper(AMINO_ACID_CODE))
   ,
   
   data_BepiPred_3_with_resno %>%
-    select(Accession, resno, resid, `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`) %>%
-    rename("PDB" = Accession) %>%
+    mutate(PDB = Accession) %>%
+    select(PDB, chain, resno, resid, `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`) %>%
     filter(resid %in% toupper(AMINO_ACID_CODE))
-) %>%
-  left_join(
-    data_DiscoTope %>%
-      select(pdb, chain, resno, residue, `DiscoTope-3.0_score`, calibrated_score, rsa) %>%
-      distinct(pdb, resno, .keep_all = TRUE) %>%
-      mutate(residue = aa123(residue)) %>%
-      rename("PDB" = pdb,
-             "resid" = residue,
-             "RSA Shrake-Rupley" = rsa,
-             "DiscoTope-3.0_calibrated_score" = calibrated_score)
-    
-  ) %>%
-  left_join(
-    data_Epigraph %>%
-      select(PDB, chain, resno, resid, Score) %>%
-      distinct(PDB, resno, .keep_all = TRUE) %>%
-      rename("Epigraph_score" = Score),
-    by = c("PDB","resno","resid")
+  ,
+  by = c("PDB","chain","resno","resid")
+)
+
+data_predictions_sequencebased
+
+data_predictions_sequencebased %>%
+  filter(if_any(everything(), is.na))
+```
+
+```{r}
+data_predictions_structurebased <- full_join(
+  data_Epigraph %>%
+    mutate(Epigraph_score = Score) %>%
+    select(PDB, chain, resno, resid, Epigraph_score)
+  ,
+  data_DiscoTope %>%
+    mutate(PDB = pdb,
+           resid = aa123(residue),
+           `RSA Shrake-Rupley` = rsa,
+           `DiscoTope-3.0_calibrated_score` = calibrated_score
+    ) %>%
+    select(PDB, chain, resno, resid, `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, `RSA Shrake-Rupley`)
+  , 
+  by = c("PDB","resno","chain","resid")
+)
+data_predictions_structurebased
+
+data_predictions_structurebased %>%
+  filter(if_any(everything(), is.na))
+
+data_predictions_structurebased <- data_predictions_structurebased %>%
+  na.omit()
+  
+data_predictions_structurebased %>%
+  filter(if_any(everything(), is.na))
+```
+
+
+```{r}
+data_predictions <- full_join(
+  data_predictions_sequencebased,
+  data_predictions_structurebased,
+  by = c("PDB", "chain", "resno","resid")
   )
+
+data_predictions %>%
+  filter(if_any(everything(), is.na))
+
+data_predictions <- data_predictions %>%
+  na.omit() 
 
 data_predictions
 ```
 
+## normalize
 ```{r}
 data_predictions_normalized <- data_predictions %>%
-  group_by(PDB) %>%
+  group_by(PDB, chain) %>%
   mutate(
     across(
-      c(`BepiPred-3.0 score` , `BepiPred-3.0 linear epitope score`, 
+      c(#`BepiPred-2.0 probability`,
+        `BepiPred-3.0 score` , `BepiPred-3.0 linear epitope score`, 
         `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, Epigraph_score), 
       rescale
     )
   ) %>%
-  ungroup() %>%
-  na.omit()
+  ungroup()
 
 data_predictions_normalized
 ```
 
-```{r}
-data_Epigraph %>%
-      select(PDB, chain, resno, resid, Score) %>%
-      distinct(PDB, resno, .keep_all = TRUE) %>%
-      rename("Epigraph_score" = Score) %>%
-  filter(PDB == "6YAG")
-```
-
-```{r}
-data_predictions %>%
-  filter(PDB == "6YAG")
-
-data_predictions_normalized %>%
-  filter(PDB == "6YAG")
-```
-
-
 ```{r, fig.width = 14}
 data_test_wide <- data_predictions_normalized %>%
-  filter(PDB == "6YAG") %>%
+  filter(PDB == "6YAG", chain == "A") %>%
+  #distinct(resno, .keep_all = TRUE) %>%
   select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
         `DiscoTope-3.0_calibrated_score`, Epigraph_score) %>%
   column_to_rownames("resno") %>%
-  na.omit() %>%
   as.data.frame()
 
 pheatmap(t(data_test_wide), 
          cluster_rows = TRUE,         
          cluster_cols = FALSE,         
          main = "6YAG", 
-         color = colorRampPalette(c("blue", "white", "red"))(50),
+         color = colorRampPalette(c("blue", "gray95", "red"))(50),
          labels_col = "resno",
          clustering_distance_rows = "correlation") 
 ```
 
 ```{r, fig.width = 14}
 for (pdb_entry in unique(data_predictions_normalized$PDB)) {
-  data_predictions_normalised_subset_wide <- data_predictions_normalized %>%
-  filter(PDB == pdb_entry) %>%
-  distinct(resno, .keep_all = TRUE) %>%
-  select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
-        `DiscoTope-3.0_calibrated_score`, Epigraph_score) %>%
-  column_to_rownames("resno") %>%
-  na.omit() %>%
-  as.data.frame()
-
-  figure <- pheatmap(t(data_predictions_normalised_subset_wide), 
-         cluster_rows = TRUE,         
-         cluster_cols = FALSE,         
-         main = paste0(pdb_entry), 
-         color = colorRampPalette(c("blue", "white", "red"))(50),
-         labels_col = "resno",
-         clustering_distance_rows = "correlation") 
+  data_predictions_normalised_subset <- data_predictions_normalized %>%
+    filter(PDB == pdb_entry) 
   
-  print(figure)
-  
-  ggsave(filename = paste0("output/figures/heatmap/", pdb_entry, "_heatmap.png"), 
-       plot = figure, 
-       width = 14, height = 10, dpi = 300,
-       bg="white")
+  for (chain_index in unique(data_predictions_normalised_subset$chain)) {
+    
+    data_predictions_normalised_subset_wide <- data_predictions_normalised_subset %>%
+      filter(chain == chain_index) %>%
+      select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score) %>%
+      column_to_rownames("resno") %>%
+      as.data.frame()
+    
+    figure <- pheatmap(t(data_predictions_normalised_subset_wide), 
+                       cluster_rows = TRUE,         
+                       cluster_cols = FALSE,         
+                       main = paste0(pdb_entry, " chain ", chain_index), 
+                       color = colorRampPalette(c("blue", "gray95", "red"))(50),
+                       labels_col = "resno",
+                       clustering_distance_rows = "correlation") 
+    
+    print(figure)
+    
+    ggsave(filename = paste0("output/figures/heatmap/", pdb_entry, " chain ", chain_index, "_heatmap.png"), 
+           plot = figure, 
+           width = 14, height = 10, dpi = 300,
+           bg="white")
+  }
 }
 ```
 
@@ -1111,47 +905,56 @@ for (pdb_entry in unique(data_predictions_normalized$PDB)) {
 ## 3D
 ### bepipred-3.0
 ```{r}
-pdbs_path = "output/pdb/"
-
 for (pdb_entry in pdb_files_list) {
-  file_path = paste0(pdbs_path,pdb_entry,".pdb")
-  print(file_path)
-
-  pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+  print(pdb_entry)
   
-  data_BepiPred_3_with_resno_subset <- data_BepiPred_3_with_resno %>% filter(Accession == pdb_entry)
-  min_score <- min(data_BepiPred_3_with_resno_subset$`BepiPred-3.0 score`, na.rm = TRUE)
-  median_score <- median(data_BepiPred_3_with_resno_subset$`BepiPred-3.0 score`, na.rm = TRUE)
-  max_score <- max(data_BepiPred_3_with_resno_subset$`BepiPred-3.0 score`, na.rm = TRUE)
+  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
   
+  if (file.exists(pdb_file)) {
+    print(pdb_file)
+    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+  } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
   
-  low_to_median <- colorRampPalette(c("blue", "gray95"))(10)
-  median_to_high <- colorRampPalette(c("gray95", "red"))(10)
+  data_BepiPred_3_with_resno_subset <- data_BepiPred_3_with_resno %>% filter(Accession == pdb_entry) %>% na.omit()
   
-  breaks <- seq(min_score, max_score, length.out = 21)  # 20 intervals
-  colors <- c(low_to_median, median_to_high)  # 20 colors
-  
-  color_map <- data.frame(
-    ProbabilityBin = cut(seq(min_score, max_score, length.out = 20), 
-                         breaks = breaks, include.lowest = TRUE),
-    color = colors
-  ) %>%
-  rbind(c(NA,"black"))
-  
-  predictions_df <- data_BepiPred_3_with_resno_subset %>%
-    mutate(ProbabilityBin = cut(`BepiPred-3.0 score`, 
-                                breaks = breaks, include.lowest = TRUE)
+  for (chain_index in unique(data_BepiPred_3_with_resno_subset$chain)) {
+    data_BepiPred_3_with_resno_subset_chain <- data_BepiPred_3_with_resno_subset %>% filter(chain == chain_index)
+    
+    min_score <- min(data_BepiPred_3_with_resno_subset_chain$`BepiPred-3.0 score`, na.rm = TRUE)
+    median_score <- median(data_BepiPred_3_with_resno_subset_chain$`BepiPred-3.0 score`, na.rm = TRUE)
+    max_score <- max(data_BepiPred_3_with_resno_subset_chain$`BepiPred-3.0 score`, na.rm = TRUE)
+    
+    
+    low_to_median <- colorRampPalette(c("blue", "gray95"))(10)
+    median_to_high <- colorRampPalette(c("gray95", "red"))(10)
+    
+    breaks <- seq(min_score, max_score, length.out = 21)  # 20 intervals
+    colors <- c(low_to_median, median_to_high)  # 20 colors
+    
+    color_map <- data.frame(
+      ProbabilityBin = cut(seq(min_score, max_score, length.out = 20), 
+                           breaks = breaks, include.lowest = TRUE),
+      color = colors
     ) %>%
-    group_by(ProbabilityBin) %>% 
-    summarize(resno_list = list(paste0(resno,":A")), .groups = "drop") %>%
-    mutate(resno_string = sapply(resno_list, function(x) str_c(x, collapse = " "))) %>%
-    left_join(color_map)
-  
-  view <- prediction.viewer(pdb_entry, pdbs_path, predictions_df = predictions_df)
-  
-  #print(view)
-  
-  saveWidget(view, file = paste0("output/BepiPred3.0/snapshot/",pdb_entry,"_bepipred3.html"), title=pdb_entry, selfcontained = TRUE)
+      rbind(c(NA,"black"))
+    
+    predictions_df <- data_BepiPred_3_with_resno_subset_chain %>%
+      mutate(ProbabilityBin = cut(`BepiPred-3.0 score`, 
+                                  breaks = breaks, include.lowest = TRUE)
+      ) %>%
+      group_by(ProbabilityBin) %>% 
+      summarize(resno_list = list(paste0(resno,":",chain_index)), .groups = "drop") %>%
+      mutate(resno_string = sapply(resno_list, function(x) str_c(x, collapse = " "))) %>%
+      left_join(color_map, by = "ProbabilityBin")
+    
+    view <- prediction.viewer(pdb_entry, pdbs_path, chain = chain_index, predictions_df = predictions_df)
+    
+    #print(view)
+    
+    saveWidget(view, file = paste0("output/BepiPred3.0/snapshot/",pdb_entry, " chain ", chain_index,"_bepipred3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
+  }
 }
 ```
 
@@ -1161,12 +964,22 @@ for (pdb_entry in pdb_files_list) {
 pdbs_path = "output/pdb/"
 
 for (pdb_entry in pdb_files_list) {
-  file_path = paste0(pdbs_path,pdb_entry,".pdb")
-  print(file_path)
-
-  pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+  print(pdb_entry)
+  
+  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
+  
+  if (file.exists(pdb_file)) {
+    print(pdb_file)
+    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+  } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
   
   data_DiscoTope_subset <- data_DiscoTope %>% filter(pdb == pdb_entry)
+  
+  for (chain_index in unique(data_DiscoTope_subset$chain)) {
+  data_DiscoTope_subset_chain <- data_DiscoTope_subset %>% filter(chain == chain_index)
+  
   min_score <- min(data_DiscoTope_subset$calibrated_score, na.rm = TRUE)
   median_score <- median(data_DiscoTope_subset$calibrated_score, na.rm = TRUE)
   max_score <- max(data_DiscoTope_subset$calibrated_score, na.rm = TRUE)
@@ -1190,15 +1003,16 @@ for (pdb_entry in pdb_files_list) {
                                 breaks = breaks, include.lowest = TRUE)
     ) %>%
     group_by(ProbabilityBin) %>% 
-    summarize(resno_list = list(paste0(resno,":A")), .groups = "drop") %>%
+    summarize(resno_list = list(paste0(resno,":",chain_index)), .groups = "drop") %>%
     mutate(resno_string = sapply(resno_list, function(x) str_c(x, collapse = " "))) %>%
-    left_join(color_map)
+    left_join(color_map, by = "ProbabilityBin")
   
-  view <- prediction.viewer(pdb_entry, pdbs_path, predictions_df = predictions_df)
+  view <- prediction.viewer(pdb_entry, pdbs_path, chain = chain_index,predictions_df = predictions_df)
   
   #print(view)
   
-  saveWidget(view, file = paste0("output/DiscoTope/snapshot/",pdb_entry,"_discotope3.html"), title=pdb_entry, selfcontained = TRUE)
+  saveWidget(view, file = paste0("output/DiscoTope/snapshot/",pdb_entry, " chain ", chain_index,"_discotope3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
+  }
 }
 ```
 

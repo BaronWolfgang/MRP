@@ -43,10 +43,13 @@ map.seqposno.to.resno <- function(sequence_AA1, pdb_object, verbose=FALSE, type=
 
 ## map.seqresno.to.resno
 map.seqresno.to.resno <- function(pdb_object, verbose=FALSE, type="overlap") {
-  subject_seq <- str_c(
-    aa321(pdb_object$seqres),
-    collapse = ""
-  )
+  subject_seq <- pdb_object$atom %>%
+    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+    select(resno, resid) %>%
+    distinct(.keep_all = TRUE) %>%
+    mutate(resid = aa321(resid)) %>%
+    pull(resid) %>%
+    str_c(collapse = "")
   
   required_adjustment <- map.seqposno.to.resno(subject_seq, pdb_object, verbose=verbose, type=type)
   
@@ -57,10 +60,12 @@ map.seqresno.to.resno <- function(pdb_object, verbose=FALSE, type="overlap") {
 ## bepipred
 create.resmap.bepipred <- function(pdb_atom_df, bepipred_epitope_prediction_df,required_adjustment) {
   resmap_df <- pdb_atom_df %>% 
-    select(resid,resno) %>%
+    select(resid,resno,chain) %>%
     unique() %>%
-    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
-    left_join(bepipred_epitope_prediction_df %>%
+    filter(resid %in% toupper(AMINO_ACID_CODE),
+           !is.na(chain),
+           chain != FALSE) %>%
+    right_join(bepipred_epitope_prediction_df %>%
                 #select(Position,AminoAcid,EpitopeProbability) %>%
                 mutate(resno = Position + required_adjustment),
               by = c("resno")
@@ -69,13 +74,15 @@ create.resmap.bepipred <- function(pdb_atom_df, bepipred_epitope_prediction_df,r
 }
 
 # prediction viewer
-prediction.viewer <- function(pdb_entry, directory, predictions_df=NULL) {
+prediction.viewer <- function(pdb_entry, directory, chain, predictions_df=NULL) {
   file_path <- paste0(directory,pdb_entry,".pdb")
+  sele <- paste0(":", chain)
+    
   view <- NGLVieweR(file_path) %>%
     stageParameters(backgroundColor = "white", zoomSpeed = 1) %>%
     addRepresentation("cartoon",
                       param = list(colorScheme = "residueindex", 
-                                   sele = ":A")
+                                   sele = sele)
     ) 
   
   if(!is.null(predictions_df)) {
