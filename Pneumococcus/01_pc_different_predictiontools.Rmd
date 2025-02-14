@@ -875,42 +875,27 @@ for (pdb_entry in pdb_files_list) {
 ```
 
 # Variability
-## AmiA
 ```{r}
-gb_lines_AmiA <- readLines("data/6. AmiA.gb")
-head(gb_lines_AmiA, 20)
+gbs_path <- "data/gb/"
+
+gb_list <- sub(
+  "\\.gb$", "", sub(
+    "^\\d+\\.\\s*", "", list.files(gbs_path, pattern = "\\.gb$")
+  )
+)
+
+gb_list
 ```
-
 ```{r}
-origin_indices <- grep("^ORIGIN", gb_lines_AmiA)
-end_indices <- grep("^//", gb_lines_AmiA)
-header_prefix <- "AmiA"
-
-fasta_content <- list()
-
-for(i in 1:length(origin_indices)) {
-  start_index <- origin_indices[i] + 2
-  end_index <- end_indices[i] - 1
-  
-  protein_sequence_raw <- gb_lines_AmiA[start_index:end_index] 
-  
-  protein_sequence <- protein_sequence_raw %>%
-    gsub("[0-9]+", "", .) %>%
-    gsub("\\s+", "", .) %>%
-    paste(collapse = "")
-  
-  header_line <- gb_lines_AmiA[grep("^TITLE", gb_lines_AmiA)[i]]
-  header <- sub("^TITLE\\s+", "", header_line)
-
-  fasta_content[[i]] <- paste0(">",header_prefix,"_", header, "\n", protein_sequence)
+for (gb in gb_list) {
+  gb_file_path <- list.files(gbs_path,pattern=paste0(gb,"\\.gb$"), full.names = TRUE)
+  convert.gb.to.fasta(gb_file_path,output_dir="data/fasta/msa/")
 }
-
-writeLines(unlist(fasta_content), "data/fasta//AmiA_sequences.fasta")
 ```
 
 ### multiple sequence alignment
 ```{r}
-AmiA_sequences <- readAAStringSet("data/fasta//AmiA_sequences.fasta")
+AmiA_sequences <- readAAStringSet("data/fasta/msa/AmiA_msa_sequences.fasta")
 AmiA_sequences
 ```
 
@@ -926,8 +911,6 @@ AmiA_alignment
 ```{r}
 print(AmiA_alignment, show="complete")
 ```
-
-#### ggmsa
 
 ### alignment matrix
 ```{r}
@@ -1038,37 +1021,64 @@ pdb_object$atom %>%
 
 
 #### mutations_data_with_resno
+
+```{r}
+short_name <- "AmiA"
+
+protein_name_pdb_entries <- data_structural %>%
+  filter(str_detect(`Proteins (TIGR4) name`, short_name)) %>%
+  pull(`PDB entry`) %>%
+  str_split(pattern = ", ") %>%
+  unlist()
+
+protein_name_pdb_entries
+```
+
+
 ```{r}
 data_variability_AmiA
 
-pdb_entry <- "8A42"
+data_variability_AmiA_with_pdb <- NULL
 
-pdb_object <- read.pdb(pdb_entry,rm.alt=FALSE)
+for (pdb_entry in protein_name_pdb_entries) {
+  print(pdb_entry)
+  
+  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
+  
+  if (file.exists(pdb_file)) {
+    print(pdb_file)
+    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+  } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
+  
+  required_adjustment <- map.seqposno.to.resno(sequence_AA1 = msaConsensusSequence(AmiA_alignment), pdb_object = pdb_object)
+  
+  resmap <- create.resmap.bepipred(pdb_object$atom, 
+                                 data_variability_AmiA %>% mutate(protein_name = "AmiA"),
+                                 required_adjustment) %>%
+    mutate(PDB = pdb_entry)
+  
+  if (is.null(data_variability_AmiA_with_pdb)) {
+    data_variability_AmiA_with_pdb <- resmap
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_variability_AmiA_with_pdb <- rbind(data_variability_AmiA_with_pdb, resmap)
+  }
+  
+}
 
-required_adjustment <- map.seqposno.to.resno(sequence_AA1 = msaConsensusSequence(AmiA_alignment), pdb_object = pdb_object)
-
-data_variability_AmiA_with_resno_8A42 <- create.resmap.bepipred(pdb_object$atom, 
-                                 data_variability_AmiA,
-                                 required_adjustment)
-
-data_variability_AmiA_with_resno_8A42
-
+data_variability_AmiA_with_pdb
 
 ```
 
 ```{r}
 data_predictions_with_variability <- data_predictions %>%
-  filter(PDB == "8A42") %>%
-  left_join(data_variability_AmiA_with_resno_8A42 %>% select(resid, resno, Variability_counts, Variability_frequency),
-            by = c("resno", "resid"))
+  right_join(data_variability_AmiA_with_pdb %>% select(protein_name,PDB, chain, resno,resid, Variability_counts, Variability_frequency),
+            by = c("PDB","chain","resno", "resid"))
 
 data_predictions_with_variability
 ```
-
-```{r}
-names(data_predictions)
-```
-
 
 ```{r, fig.width = 14}
 data_predictions_with_variability %>%
@@ -1082,7 +1092,7 @@ data_predictions_with_variability %>%
   
   geom_text(aes(label = Score_Type, x = (min(resno) + (max(resno) - min(resno))/2)), color = "black",y = Inf, vjust = 1.5, size = 4, family = "Arial", check_overlap = TRUE) +
   
-  facet_wrap(~Score_Type, ncol = 1, scales = "free_y") +
+  facet_wrap(PDB~Score_Type, ncol = 1, scales = "free_y") +
   theme_minimal() +
   theme(strip.text = element_blank())
 ```
@@ -1105,10 +1115,10 @@ data_predictions_with_variability_normalized
 
 ```{r}
 data_test_wide <- data_predictions_with_variability_normalized %>%
+  filter(PDB == "8A42", chain == "A") %>%
   select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
         `DiscoTope-3.0_calibrated_score`, Epigraph_score, Variability_frequency) %>%
   column_to_rownames("resno") %>%
-  na.omit() %>%
   as.data.frame()
 
 pheatmap(t(data_test_wide), 
@@ -1121,7 +1131,7 @@ pheatmap(t(data_test_wide),
 ```
 
 # Alphafold 3 structures
-Here we predict the alphafold 3 structures based on the recombinant sequences
+Here we predict the Alphafold 3 structures based on the recombinant sequences, to more easily use the alphafold server we create a .json file with all of the sequences.  
 ```{r}
 library(jsonlite)
 
@@ -1196,8 +1206,6 @@ write_json_file <- function(json_data, output_file) {
   
   write_json(json_data, output_file, pretty = TRUE, auto_unbox = TRUE) #auto_unbox is very important as otherwise the Alphafoldserver will not except the .json
 }
-
-
 
 # Define input and output paths
 fasta_file <- "data/fasta/sp_recombinant_protein_sequences.fasta"
