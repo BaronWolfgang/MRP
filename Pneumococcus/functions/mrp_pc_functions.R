@@ -42,6 +42,8 @@ map.seqposno.to.resno <- function(sequence_AA1, pdb_object, verbose=FALSE, type=
 }
 
 ## map.seqresno.to.resno
+library("Biostrings")
+
 map.seqresno.to.resno <- function(pdb_object, verbose=FALSE, type="overlap") {
   subject_seq <- pdb_object$atom %>%
     filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
@@ -58,17 +60,17 @@ map.seqresno.to.resno <- function(pdb_object, verbose=FALSE, type="overlap") {
 
 # create resmap
 ## bepipred
-create.resmap.bepipred <- function(pdb_atom_df, bepipred_epitope_prediction_df,required_adjustment) {
+create.resmap <- function(pdb_atom_df, epitope_prediction_df,required_adjustment, join_by = c("resno")) {
   resmap_df <- pdb_atom_df %>% 
     select(resid,resno,chain) %>%
     unique() %>%
     filter(resid %in% toupper(AMINO_ACID_CODE),
            !is.na(chain),
            chain != FALSE) %>%
-    right_join(bepipred_epitope_prediction_df %>%
+    right_join(epitope_prediction_df %>%
                 #select(Position,AminoAcid,EpitopeProbability) %>%
                 mutate(resno = Position + required_adjustment),
-              by = c("resno")
+              by = join_by
     )
   return(resmap_df)
 }
@@ -106,7 +108,7 @@ prediction.viewer <- function(pdb_entry, directory, chain, predictions_df=NULL) 
 }
 
 #AlphaFold3 functions
-convert.gb.to.fasta <- function(gb_file_path, output_dir = NULL) {
+gb2fasta <- function(gb_file_path, output_dir = NULL) {
   gb_lines <- readLines(gb_file_path)
   short_name <- sub(
     "\\.gb$", "", sub(
@@ -138,5 +140,4 @@ convert.gb.to.fasta <- function(gb_file_path, output_dir = NULL) {
   }
   
   writeLines(unlist(fasta_content), paste0(output_dir,gb_file,"_msa_sequences.fasta"))
-}
 }

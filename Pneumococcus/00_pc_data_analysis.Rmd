@@ -112,71 +112,88 @@ data_structural
 
 ## download all pdb's
 ```{r}
-data_structural_with_pdb <- data_structural %>%
-  mutate(pdb_objects = map(
-    `PDB entry`,  # Column containing PDB entry IDs or file names
-    ~ if (!is.na(.x)) {
-      # Split the PDB entries if multiple IDs are present
-      pdb_list <- strsplit(.x, ",\\s*")[[1]]
-      
-      # Map over each PDB entry to read the corresponding PDB file
-      setNames(
-        map(pdb_list, function(pdb_entry) {
-          tryCatch(
-            {
-              # Read the PDB file using read.pdb
-              pdb_obj <- read.pdb(pdb_entry)
-              pdb_obj$pdb_entry <- pdb_entry
-              
-              write.pdb(pdb_obj, file = paste0("output/pdb/",pdb_entry, ".pdb"))
-              
-              return(pdb_obj)
-            },
-            error = function(e) {
-              message(paste("Error reading PDB file:", pdb_entry))  # Optionally print a message on error
-              return(NA)  # Return NA if an error occurs
-            }
-          )
-        }),
-        pdb_list  # Set the names of the list elements to be the PDB IDs
-      )
-    } else {
-      NA  # For rows where `PDB entry` is NA, return NA
-    }
-    
-    
-  )) 
-  
-```
+pdb_download_list <- data_structural %>%
+  pull(`PDB entry`) %>%
+  na.omit() %>%
+  str_split(", ") %>%
+  unlist()
 
+pdb_download_list
+```
 
 ```{r}
-data_structural_with_pdb %>%
-  filter(!is.na(`PDB entry`)#,
-         #`Protein class` != "Others"
-         ) %>%
-  pull(pdb_objects) %>%
-  map(~ {
-    map(.x, function(pdb_object) {
-      # Check if pdb_object is a list and contains the necessary components
-      if (is.list(pdb_object) && !is.null(pdb_object$pdb_entry) && !is.null(pdb_object$seqres)) {
-        # Extract sequence information
-        fasta_header <- pdb_object$pdb_entry
-        fasta_sequence <- paste(aa321(pdb_object$seqres), collapse = "")
-        
-        # If both header and sequence are non-empty, return FASTA formatted string
-        if (nchar(fasta_header) > 0 && nchar(fasta_sequence) > 0) {
-          paste0(">", fasta_header, "\n", fasta_sequence)
-        } else {
-          # Print a message if either header or sequence is missing
-          message("Skipping empty PDB entry: ", pdb_object$pdb_entry)
-          return(NULL)  # Skip this entry
-        }
-      } else {
-        return(NULL)  # Return NA if invalid
-      }
+pdbs_path = "data/pdb/"
+get.pdb(ids = pdb_download_list, path = pdbs_path, overwrite = TRUE)
+```
+
+## check missing pdb's and retry
+```{r}
+pdb_downloads <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
+
+pdb_missing <- setdiff(pdb_download_list, pdb_downloads)
+pdb_missing
+
+for (pdb_entry in pdb_missing) {
+  tryCatch({
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+    write.pdb(pdb = pdb_object, file = paste0(pdbs_path, pdb_entry, ".pdb"))
+  }, error = function(e) {
+    print(paste("Error reading PDB file:", pdb_entry, "- Skipping."))
+  })
+}
+
+pdb_downloads <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
+
+pdb_missing <- setdiff(pdb_download_list, pdb_downloads)
+pdb_missing
+```
+
+#Convert pdb to fasta
+```{r}
+fasta_content_list <- c() 
+
+for(pdb_entry in pdb_downloads) {
+  print(pdb_entry)
+  
+  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb")
+  
+  if (file.exists(pdb_file)) {
+    pdb_object <- tryCatch({
+      read.pdb(file = pdb_file, rm.alt = FALSE)
+    }, error = function(e) {
+      print(paste("Error reading file:", pdb_file, "- Trying to read from pdb_entry:", pdb_entry))
+      return(read.pdb(pdb_entry, rm.alt = FALSE))
     })
-  }) %>%
-  unlist() %>%
+  } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
+  
+  if (is.null(pdbseq(pdb_object))) {
+    print(paste("Missing pdbseq:", pdb_file, "- Trying to read from pdb_entry:", pdb_entry))
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
+  
+  fasta_sequence <- pdbseq(pdb_object) %>% 
+    enframe(name = "resno", value = "residue") %>%
+    distinct(resno, .keep_all = TRUE) %>% 
+    pull(residue) %>%
+    str_c(collapse = "")
+  
+  fasta_content <- paste0(">", pdb_entry, "\n", fasta_sequence)
+  
+  fasta_content_list <- c(fasta_content_list, fasta_content) 
+  
+}
+
+fasta_content_list %>% 
   writeLines("data/fasta/pdb_protein_sequences.fasta")
 ```
+
+## check for missing fasta's
+```{r}
+missing_fasta <- setdiff(pdb_downloads,
+                        gsub("^>|\n.*", "", fasta_content_list))
+
+missing_fasta
+```
+

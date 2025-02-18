@@ -41,6 +41,12 @@ for (package in BiocManager_packages_to_install) {
 source("functions/mrp_pc_functions.R")
 ```
 
+#File paths
+```{r}
+pdbs_path = "data/pdb/"
+```
+
+
 # BepiPred-2.0
 ## split fasta into parts
 Bepi-2.0 only allows for 50 proteins at a time.
@@ -88,17 +94,9 @@ PDB_list
 ```
 
 ```{r}
-pdbs_path = "output/pdb/"
+pdb_files_list <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
 
-pdb_files_list <- sub("\\.pdb$", "",
-                      list.files(path = pdbs_path, 
-                             pattern = "\\.pdb$")
-                      )
-
-for (pdb_entry in pdb_files_list) {
-  print(pdb_entry)
-
-}
+pdb_files_list
 ```
 
 ## BepiPred-2.0 with resno
@@ -120,7 +118,7 @@ for (pdb_entry in pdb_files_list) {
   required_adjustment <- map.seqresno.to.resno(pdb_object)
   #print(required_adjustment)
   
-  resmap <- create.resmap.bepipred(pdb_object$atom, 
+  resmap <- create.resmap(pdb_object$atom, 
                                            data_BepiPred_2 %>% filter(Entry == pdb_entry),
                                            required_adjustment)
   
@@ -136,7 +134,7 @@ data_BepiPred_2_with_resno
 ```
 
 ```{r}
-pdbs_path = "output/pdb/"
+pdbs_path = "data/pdb/"
 
 for (pdb_entry in pdb_files_list) {
   file_path = paste0(pdbs_path,pdb_entry,".pdb")
@@ -151,7 +149,7 @@ for (pdb_entry in pdb_files_list) {
   required_adjustment <- map.seqresno.to.resno(pdb_object)
   #print(required_adjustment)
   
-  resmap <- create.resmap.bepipred(pdb_object$atom, 
+  resmap <- create.resmap(pdb_object$atom, 
                                    data_BepiPred_2 %>% filter(Entry == pdb_entry),
                                    required_adjustment)
   print(resmap)
@@ -272,7 +270,7 @@ for (pdb_entry in pdb_files_list) {
   required_adjustment <- map.seqresno.to.resno(pdb_object)
   #print(required_adjustment)
   
-  resmap <- create.resmap.bepipred(pdb_object$atom, 
+  resmap <- create.resmap(pdb_object$atom, 
                                            data_BepiPred_3 %>% filter(Accession == pdb_entry),
                                            required_adjustment)
   
@@ -407,6 +405,7 @@ plot_epigraph
 ```
 
 #GraphBepi
+Lookup the longest chain per protein
 ```{r}
 data_DiscoTope %>%
   filter(residue %in% names(AMINO_ACID_CODE)) %>%
@@ -415,6 +414,7 @@ data_DiscoTope %>%
   mutate(across(where(is.list), ~sapply(., function(x) ifelse(is.null(x), NA, length(x)))))
 ```
 
+Visually check all chains per protein
 ```{r}
 for (pdb_entry in unique(data_DiscoTope$pdb)) {
   print(pdb_entry)
@@ -423,13 +423,137 @@ for (pdb_entry in unique(data_DiscoTope$pdb)) {
   
   plot <- data_DiscoTope_subset %>%
     ggplot(aes(x=resno, colour = residue)) +
-    geom_point(aes(y=1)) +
+    geom_point(aes(y=0)) +
     facet_wrap(~chain,ncol = 1) +
     labs(title=paste0(pdb_entry)) +
     theme_minimal()
   
   
   print(plot)
+}
+```
+
+```{r}
+data_DiscoTope %>% filter(pdb == "2L4O")
+```
+
+
+## read in the results
+```{r}
+graphbepi_txt_files <- list.files(path = "output/GraphBepi/individual_files/", pattern = "\\.txt$")
+
+graphbepi_txt_files
+```
+
+```{r}
+data_GraphBepi <- NULL
+
+for (txt_file in graphbepi_txt_files) {
+  print(txt_file)
+  PDB <- sub("_.*", "", txt_file)
+  chain <- sub("^[^_]+_([A-Za-z0-9])_.*", "\\1", txt_file)
+
+  temp_data <- read.table(paste0("output/GraphBepi/individual_files/",txt_file), header = TRUE, skip=1)
+  
+  temp_data <- temp_data %>% 
+    mutate(
+      PDB = PDB,
+      chain = chain,
+      resid = aa123(AA),
+      `GraphBepi probability` = Prob,
+      `GraphBepi prediction` = Pred,
+     Position = row_number()
+    ) %>%
+    select(PDB, chain, resid, Position, `GraphBepi probability`, `GraphBepi prediction`)
+  
+  if (is.null(data_GraphBepi)) {
+    data_GraphBepi <- temp_data
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_GraphBepi <- rbind(data_GraphBepi, temp_data)
+  }
+}
+
+data_GraphBepi
+```
+
+```{r}
+data_GraphBepi_with_resno <- NULL
+
+for (pdb_entry in unique(data_GraphBepi$PDB)) {
+  print(pdb_entry)
+  
+  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
+  
+  if (file.exists(pdb_file)) {
+    print(pdb_file)
+    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+  } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
+  
+  graphbepi_subset <- data_GraphBepi %>% filter(PDB == pdb_entry)
+  graphbepi_sequence <- graphbepi_subset %>% pull(resid) %>% aa321() %>% str_c(collapse = "")
+  graphbepi_chain <- graphbepi_subset %>% pull(chain) %>% unique()
+  
+  required_adjustment <- map.seqposno.to.resno(sequence_AA1 = graphbepi_sequence, pdb_object)
+  print(required_adjustment)
+  
+  resmap <- create.resmap(pdb_object$atom %>% filter(chain == graphbepi_chain), 
+                                           graphbepi_subset,
+                                           required_adjustment, join_by = c("resno","chain","resid")
+                                   )
+  
+  if (is.null(data_GraphBepi_with_resno)) {
+    data_GraphBepi_with_resno <- resmap
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_GraphBepi_with_resno <- rbind(data_GraphBepi_with_resno, resmap)
+  }
+}
+
+data_GraphBepi_with_resno
+
+```
+
+
+## all predictions, one chain
+```{r}
+data_predictions_1chain <- data_GraphBepi_with_resno %>% 
+  
+  select(!Position) %>%
+  inner_join(data_predictions,
+            by=c("PDB","chain","resno","resid"))
+
+data_predictions_1chain
+```
+
+```{r}
+for (pdb_entry in unique(data_predictions_1chain$PDB)) {
+  data_test_wide <- data_predictions_1chain %>%
+    filter(PDB == pdb_entry) %>%
+    #group_by(PDB, chain) %>%
+    mutate(
+      across(
+        c(`BepiPred-2.0 probability`,
+          `BepiPred-3.0 score` , `BepiPred-3.0 linear epitope score`, 
+          `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, Epigraph_score, `GraphBepi probability`), 
+        rescale
+      )
+    ) %>%
+    ungroup() %>%
+    select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+           `DiscoTope-3.0_calibrated_score`, Epigraph_score, `GraphBepi probability`) %>%
+    column_to_rownames("resno") %>%
+    as.data.frame()
+  
+  pheatmap(t(data_test_wide), 
+           cluster_rows = TRUE,         
+           cluster_cols = FALSE,         
+           main = pdb_entry, 
+           color = colorRampPalette(c("blue", "gray95", "red"))(50),
+           labels_col = "resno",
+           clustering_distance_rows = "correlation")  
 }
 ```
 
@@ -811,7 +935,7 @@ for (pdb_entry in pdb_files_list) {
     
     #print(view)
     
-    saveWidget(view, file = paste0("output/BepiPred3.0/snapshot/",pdb_entry, " chain ", chain_index,"_bepipred3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
+    saveWidget(view, file = paste0("output/BepiPred3.0/snapshot/",pdb_entry, "_", chain_index,"_bepipred3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
   }
 }
 ```
@@ -819,8 +943,6 @@ for (pdb_entry in pdb_files_list) {
 
 ### discotope-3.0
 ```{r}
-pdbs_path = "output/pdb/"
-
 for (pdb_entry in pdb_files_list) {
   print(pdb_entry)
   
@@ -869,7 +991,7 @@ for (pdb_entry in pdb_files_list) {
   
   #print(view)
   
-  saveWidget(view, file = paste0("output/DiscoTope/snapshot/",pdb_entry, " chain ", chain_index,"_discotope3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
+  saveWidget(view, file = paste0("output/DiscoTope/snapshot/",pdb_entry, "_", chain_index,"_discotope3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
   }
 }
 ```
@@ -889,7 +1011,7 @@ gb_list
 ```{r}
 for (gb in gb_list) {
   gb_file_path <- list.files(gbs_path,pattern=paste0(gb,"\\.gb$"), full.names = TRUE)
-  convert.gb.to.fasta(gb_file_path,output_dir="data/fasta/msa/")
+  gb2fasta(gb_file_path,output_dir="data/fasta/msa/")
 }
 ```
 
@@ -1054,7 +1176,7 @@ for (pdb_entry in protein_name_pdb_entries) {
   
   required_adjustment <- map.seqposno.to.resno(sequence_AA1 = msaConsensusSequence(AmiA_alignment), pdb_object = pdb_object)
   
-  resmap <- create.resmap.bepipred(pdb_object$atom, 
+  resmap <- create.resmap(pdb_object$atom, 
                                  data_variability_AmiA %>% mutate(protein_name = "AmiA"),
                                  required_adjustment) %>%
     mutate(PDB = pdb_entry)
