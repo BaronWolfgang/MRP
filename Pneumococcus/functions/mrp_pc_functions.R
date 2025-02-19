@@ -59,7 +59,6 @@ map.seqresno.to.resno <- function(pdb_object, verbose=FALSE, type="overlap") {
 }
 
 # create resmap
-## bepipred
 create.resmap <- function(pdb_atom_df, epitope_prediction_df,required_adjustment, join_by = c("resno")) {
   resmap_df <- pdb_atom_df %>% 
     select(resid,resno,chain) %>%
@@ -68,7 +67,6 @@ create.resmap <- function(pdb_atom_df, epitope_prediction_df,required_adjustment
            !is.na(chain),
            chain != FALSE) %>%
     right_join(epitope_prediction_df %>%
-                #select(Position,AminoAcid,EpitopeProbability) %>%
                 mutate(resno = Position + required_adjustment),
               by = join_by
     )
@@ -76,7 +74,9 @@ create.resmap <- function(pdb_atom_df, epitope_prediction_df,required_adjustment
 }
 
 # prediction viewer
-prediction.viewer <- function(pdb_entry, directory, chain, predictions_df=NULL) {
+prediction.viewer <- function(pdb_entry, directory, chain, sele_color_df=NULL) {
+  #view_mode = c("colorValue","residueindex")
+  
   file_path <- paste0(directory,pdb_entry,".pdb")
   sele <- paste0(":", chain)
     
@@ -87,23 +87,34 @@ prediction.viewer <- function(pdb_entry, directory, chain, predictions_df=NULL) 
                                    sele = sele)
     ) 
   
-  if(!is.null(predictions_df)) {
-    for (row in 1:nrow(predictions_df)) {
-      #print(predictions_df)
-      #print(predictions_df$resno_string[row])
-      #print(predictions_df$color[row])
-      view <- view %>%
-        addRepresentation(
-          "surface",  # Add surface representation once
-          param = list(
-            sele = predictions_df$resno_string[row],
-            colorValue = predictions_df$color[row]
+  if(!is.null(sele_color_df)) {
+    # view_mode == "colorValue" expects a dataframe with columns $resno_string, containing the selected residues to be colored, and $color containing the desired color 
+    
+    for (row in 1:nrow(sele_color_df)) {
+      if (sele_color_df$color[row] == "residueindex") {
+        view <- view %>%
+          addRepresentation(
+            "surface",  # Add surface representation once
+            param = list(
+              sele = sele_color_df$resno_string[row],
+              colorScheme = sele_color_df$color[row]
+            )
           )
-        )
+      }
+      else {
+        view <- view %>%
+          addRepresentation(
+            "surface",  # Add surface representation once
+            param = list(
+              sele = sele_color_df$resno_string[row],
+              colorValue = sele_color_df$color[row]
+            )
+          )
+      }
     } 
     
   }
-  
+
   return(view)
 }
 

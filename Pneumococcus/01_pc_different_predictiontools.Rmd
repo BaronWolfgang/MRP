@@ -261,9 +261,18 @@ for (pdb_entry in pdb_files_list) {
   pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
   
   if (file.exists(pdb_file)) {
-    print(pdb_file)
-    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+    pdb_object <- tryCatch({
+      read.pdb(file = pdb_file, rm.alt = FALSE)
+    }, error = function(e) {
+      print(paste("Error reading file:", pdb_file, "- Trying to read from pdb_entry:", pdb_entry))
+      return(read.pdb(pdb_entry, rm.alt = FALSE))
+    })
   } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
+  
+  if (is.null(pdbseq(pdb_object))) {
+    print(paste("Missing pdbseq:", pdb_file, "- Trying to read from pdb_entry:", pdb_entry))
     pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
   }
   
@@ -287,8 +296,8 @@ data_BepiPred_3_with_resno
 
 ```{r}
 data_BepiPred_3_with_resno %>%
-  pull(`BepiPred-3.0 score`) %>%
-  summary()
+  add_count(Accession,chain,name = "chain_length") %>%
+  filter(Accession == "1WRA")
 ```
 
 
@@ -305,48 +314,11 @@ for (csv_file in csv_files) {
   if (is.null(data_DiscoTope)) {
     data_DiscoTope <- temp_data
   } else {
-    # Otherwise, rbind the current data to the combined data frame
     data_DiscoTope <- rbind(data_DiscoTope, temp_data)
   }
 }
 
 data_DiscoTope
-```
-
-```{r}
-data_DiscoTope %>%
-  filter(pdb == "3CX3")
-```
-
-## Test 3CX3
-```{r}
-data_DiscoTope <- data_DiscoTope %>%
-  mutate(pdb = sub("_.*", "", pdb)) %>%
-  rename(res_id ="resno" )
-
-data_DiscoTope %>%
-  filter(pdb == "3CX3")
-
-data_BepiPred_2 %>%
-  filter(Entry == "3CX3")
-```
-
-
-```{r}
-plot_discotope <- data_DiscoTope %>%
-  filter(pdb == "3CX3") %>%
-  ggplot(aes(x=resno, y=calibrated_score, fill=calibrated_score)) +
-  geom_col(width = 1) +
-  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +  
-  theme_minimal() + 
-  theme(
-    axis.text.y = element_blank(),   
-    axis.title.y = element_blank(),  
-    axis.ticks.y = element_blank()
-  ) +
-  labs(fill = "DiscoTope-3.0 prediction")
-
-plot_discotope
 ```
 
 # Epigraph
@@ -405,7 +377,7 @@ plot_epigraph
 ```
 
 #GraphBepi
-Lookup the longest chain per protein
+Lookup the longest chain per protein as GraphBepi 
 ```{r}
 data_DiscoTope %>%
   filter(residue %in% names(AMINO_ACID_CODE)) %>%
@@ -532,7 +504,7 @@ data_predictions_1chain
 for (pdb_entry in unique(data_predictions_1chain$PDB)) {
   data_test_wide <- data_predictions_1chain %>%
     filter(PDB == pdb_entry) %>%
-    #group_by(PDB, chain) %>%
+    group_by(PDB, chain) %>%
     mutate(
       across(
         c(`BepiPred-2.0 probability`,
@@ -556,6 +528,43 @@ for (pdb_entry in unique(data_predictions_1chain$PDB)) {
            clustering_distance_rows = "correlation")  
 }
 ```
+
+### PCA subset
+```{r}
+data_predictions_1chain
+
+score_columns <- c("GraphBepi probability","Epigraph_score" ,"DiscoTope-3.0_calibrated_score",
+                   "BepiPred-2.0 probability", 
+                   "BepiPred-3.0 score")
+
+score_columns
+```
+
+```{r}
+scaled_scores <- data_predictions_1chain %>%
+  select(all_of(score_columns)) %>%
+  scale()
+  
+pca_result <- prcomp(t(scaled_scores),center = TRUE, scale. = TRUE)
+
+pca_scores <- as.data.frame(pca_result$x) %>%
+  rownames_to_column(var = "score_type")
+```
+
+```{r}
+library(ggrepel)
+
+pca_scores <- as.data.frame(pca_result$x) %>%
+  rownames_to_column(var = "score_type")
+
+# Scatter plot of PC1 vs PC2
+ggplot(pca_scores, aes(x = PC1, y = PC2, label = score_type)) +
+  geom_point(alpha = 0.7, color = "blue") +
+  geom_text_repel() +
+  labs(title = "PCA of concatenated epitope prediction scores across different tools", x = "PC1", y = "PC2") +
+  theme_minimal()
+```
+
 
 
 # Plot all together
@@ -822,7 +831,7 @@ data_predictions_normalized <- data_predictions %>%
   group_by(PDB, chain) %>%
   mutate(
     across(
-      c(#`BepiPred-2.0 probability`,
+      c(`BepiPred-2.0 probability`,
         `BepiPred-3.0 score` , `BepiPred-3.0 linear epitope score`, 
         `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, Epigraph_score), 
       rescale
@@ -875,7 +884,7 @@ for (pdb_entry in unique(data_predictions_normalized$PDB)) {
     
     print(figure)
     
-    ggsave(filename = paste0("output/figures/heatmap/", pdb_entry, " chain ", chain_index, "_heatmap.png"), 
+    ggsave(filename = paste0("output/figures/heatmap/", pdb_entry, "_", chain_index, "_heatmap.png"), 
            plot = figure, 
            width = 14, height = 10, dpi = 300,
            bg="white")
@@ -893,8 +902,12 @@ for (pdb_entry in pdb_files_list) {
   pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
   
   if (file.exists(pdb_file)) {
-    print(pdb_file)
-    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+    pdb_object <- tryCatch({
+      read.pdb(file = pdb_file, rm.alt = FALSE)
+    }, error = function(e) {
+      print(paste("Error reading file:", pdb_file, "- Trying to read from pdb_entry:", pdb_entry))
+      return(read.pdb(pdb_entry, rm.alt = FALSE))
+    })
   } else {
     pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
   }
@@ -931,11 +944,11 @@ for (pdb_entry in pdb_files_list) {
       mutate(resno_string = sapply(resno_list, function(x) str_c(x, collapse = " "))) %>%
       left_join(color_map, by = "ProbabilityBin")
     
-    view <- prediction.viewer(pdb_entry, pdbs_path, chain = chain_index, predictions_df = predictions_df)
+    view <- prediction.viewer(pdb_entry, pdbs_path, chain = chain_index, sele_color_df = predictions_df)
     
     #print(view)
     
-    saveWidget(view, file = paste0("output/BepiPred3.0/snapshot/",pdb_entry, "_", chain_index,"_bepipred3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
+    saveWidget(view, file = paste0("output/BepiPred3.0/snapshot/score/",pdb_entry, "_", chain_index,"_bepipred3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
   }
 }
 ```
@@ -949,8 +962,12 @@ for (pdb_entry in pdb_files_list) {
   pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
   
   if (file.exists(pdb_file)) {
-    print(pdb_file)
-    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+    pdb_object <- tryCatch({
+      read.pdb(file = pdb_file, rm.alt = FALSE)
+    }, error = function(e) {
+      print(paste("Error reading file:", pdb_file, "- Trying to read from pdb_entry:", pdb_entry))
+      return(read.pdb(pdb_entry, rm.alt = FALSE))
+    })
   } else {
     pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
   }
@@ -987,14 +1004,163 @@ for (pdb_entry in pdb_files_list) {
     mutate(resno_string = sapply(resno_list, function(x) str_c(x, collapse = " "))) %>%
     left_join(color_map, by = "ProbabilityBin")
   
-  view <- prediction.viewer(pdb_entry, pdbs_path, chain = chain_index,predictions_df = predictions_df)
+  view <- prediction.viewer(pdb_entry, pdbs_path, chain = chain_index,sele_color_df = predictions_df)
   
   #print(view)
   
-  saveWidget(view, file = paste0("output/DiscoTope/snapshot/",pdb_entry, "_", chain_index,"_discotope3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
+  saveWidget(view, file = paste0("output/DiscoTope/snapshot/score/",pdb_entry, "_", chain_index,"_discotope3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
   }
 }
 ```
+
+### colour epitopes by resno
+Colouring predicted epitopes by resno could help identify discontinous epitopes
+```{r}
+for (pdb_entry in pdb_files_list) {
+  print(pdb_entry)
+  
+  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
+  
+  if (file.exists(pdb_file)) {
+    pdb_object <- tryCatch({
+      read.pdb(file = pdb_file, rm.alt = FALSE)
+    }, error = function(e) {
+      print(paste("Error reading file:", pdb_file, "- Trying to read from pdb_entry:", pdb_entry))
+      return(read.pdb(pdb_entry, rm.alt = FALSE))
+    })
+  } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
+  
+  data_BepiPred_3_with_resno_subset <- data_BepiPred_3_with_resno %>% filter(Accession == pdb_entry) %>% na.omit()
+  
+  quantile_threshold <- 0.85  #0.8 == top 20%
+  
+  for (chain_index in unique(data_BepiPred_3_with_resno_subset$chain)) {
+    data_BepiPred_3_with_resno_subset_chain <- data_BepiPred_3_with_resno_subset %>% filter(chain == chain_index)
+    
+    score_threshold <- quantile(data_BepiPred_3_with_resno_subset_chain$`BepiPred-3.0 score`, 
+                                probs = quantile_threshold, na.rm = TRUE)
+    
+    predictions_df <- data_BepiPred_3_with_resno_subset_chain %>%
+      mutate(color = ifelse(`BepiPred-3.0 score` >= score_threshold, "residueindex", "white")) %>%
+      group_by(color) %>% 
+      summarize(resno_list = list(paste0(resno, ":", chain_index)), .groups = "drop") %>%
+      mutate(resno_string = sapply(resno_list, function(x) str_c(x, collapse = " ")))
+    
+    view <- prediction.viewer(pdb_entry, pdbs_path, chain = chain_index, sele_color_df = predictions_df)
+    
+    #print(view)
+    
+    saveWidget(view, file = paste0("output/BepiPred3.0/snapshot/conformational/",pdb_entry, "_", chain_index,"_resid_bepipred3.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
+  }
+}
+```
+
+```{r}
+for (pdb_entry in pdb_files_list) {
+  print(pdb_entry)
+  
+  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
+  
+  if (file.exists(pdb_file)) {
+    print(pdb_file)
+    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+  } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
+  
+  data_DiscoTope_subset <- data_DiscoTope %>% filter(pdb == pdb_entry)
+  
+  quantile_threshold <- 0.85  #0.8 == top 20%
+  
+  for (chain_index in unique(data_DiscoTope_subset$chain)) {
+    data_DiscoTope_subset_chain <- data_DiscoTope_subset %>% filter(chain == chain_index)
+    
+    score_threshold <- quantile(data_DiscoTope_subset_chain$`DiscoTope-3.0_score`, 
+                                probs = quantile_threshold, na.rm = TRUE)
+    
+    predictions_df <- data_DiscoTope_subset_chain %>%
+      mutate(color = ifelse(`DiscoTope-3.0_score` >= score_threshold, "residueindex", "white")) %>%
+      group_by(color) %>% 
+      summarize(resno_list = list(paste0(resno, ":", chain_index)), .groups = "drop") %>%
+      mutate(resno_string = sapply(resno_list, function(x) str_c(x, collapse = " ")))
+    
+    view <- prediction.viewer(pdb_entry, pdbs_path, chain = chain_index, sele_color_df = predictions_df)
+    
+    print(view)
+    
+    saveWidget(view, file = paste0("output/DiscoTope/snapshot/conformational/",pdb_entry, "_", chain_index,"_resid_discotope.html"), title=paste0(pdb_entry, " chain ", chain_index), selfcontained = TRUE)
+  }
+}
+```
+
+
+## Longest chain
+```{r}
+str(data_predictions$chain)
+```
+```{r}
+data_predictions_longestchain <- inner_join(
+  data_predictions_structurebased %>%
+    add_count(PDB, chain, name = "chain_length") %>%  # Add chain length count
+    arrange(PDB,desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+    group_by(PDB) %>%
+    filter(chain_length == max(chain_length)) %>%  
+    filter(chain == min(chain)) %>% 
+    ungroup() %>%  
+    select(-chain_length),
+  data_predictions_sequencebased,
+  by = c("PDB", "chain", "resno","resid")
+  )
+
+data_predictions_longestchain
+```
+
+### PCA
+```{r}
+score_columns <- c("Epigraph_score", "DiscoTope-3.0_calibrated_score",
+                   "BepiPred-2.0 probability", 
+                   "BepiPred-3.0 score")
+
+score_columns
+```
+```{r}
+scaled_scores <- data_predictions_longestchain %>%
+  select(all_of(score_columns)) %>%
+  scale()
+  
+pca_result <- prcomp(t(scaled_scores),center = TRUE, scale. = TRUE)
+```
+
+
+```{r}
+explained_variance <- data.frame(
+  PC = paste0("PC", 1:length(pca_result$sdev)),
+  Variance = (pca_result$sdev^2) / sum(pca_result$sdev^2) * 100
+)
+
+# Scree plot
+ggplot(explained_variance, aes(x = PC, y = Variance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Scree Plot", x = "Principal Components", y = "Variance Explained (%)") +
+  theme_minimal()
+```
+
+```{r}
+library(ggrepel)
+
+pca_scores <- as.data.frame(pca_result$x) %>%
+  rownames_to_column(var = "score_type")
+
+# Scatter plot of PC1 vs PC2
+ggplot(pca_scores, aes(x = PC1, y = PC2, label = score_type)) +
+  geom_point(alpha = 0.7, color = "blue") +
+  geom_text_repel() +
+  labs(title = "PCA of concatenated epitope prediction scores across different tools", x = "PC1", y = "PC2") +
+  theme_minimal()
+```
+
 
 # Variability
 ```{r}
@@ -1143,7 +1309,6 @@ pdb_object$atom %>%
 
 
 #### mutations_data_with_resno
-
 ```{r}
 short_name <- "AmiA"
 
@@ -1257,7 +1422,6 @@ Here we predict the Alphafold 3 structures based on the recombinant sequences, t
 ```{r}
 library(jsonlite)
 
-# Function to parse FASTA file and extract headers and sequences correctly
 parse_fasta <- function(fasta_file) {
   if (!file.exists(fasta_file)) {
     stop("Error: FASTA file does not exist at the specified path: ", fasta_file)
@@ -1291,14 +1455,14 @@ parse_fasta <- function(fasta_file) {
 }
 
 # Function to generate the correct JSON structure
-generate_json <- function(fasta_file) {
+generate_json <- function(fasta_file, suffix = "recombinant protein") {
   sequences <- parse_fasta(fasta_file)
   
   json_data <- lapply(sequences, function(seq_data) {
 
     clean_name <- sub("([^(\\s]+)(\\s|\\().*", "\\1", seq_data$name)
     clean_name <- gsub("\\s+", "", clean_name)
-    clean_name <- paste(clean_name, "recombinant protein")
+    clean_name <- paste(clean_name, suffix)
     
     list(
       name = as.character(clean_name),  
@@ -1328,7 +1492,10 @@ write_json_file <- function(json_data, output_file) {
   
   write_json(json_data, output_file, pretty = TRUE, auto_unbox = TRUE) #auto_unbox is very important as otherwise the Alphafoldserver will not except the .json
 }
+```
 
+
+```{r}
 # Define input and output paths
 fasta_file <- "data/fasta/sp_recombinant_protein_sequences.fasta"
 output_json_file <- "output/AlphaFold3/sp_recombinant_protein_sequences.json"
