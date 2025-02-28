@@ -88,7 +88,7 @@ writeLines(fasta_content, "data/fasta/sp_recombinant_protein_sequences.fasta")
 cat(fasta_content)
 ```
 
-#Data structure
+#Data structural
 ##loading
 ```{r}
 data_structural <- read_xlsx("data/Pneumoproteins_PDB_structuralData.xlsx") %>%
@@ -128,12 +128,13 @@ get.pdb(ids = pdb_download_list, path = pdbs_path, overwrite = TRUE)
 
 ## check missing pdb's and retry
 ```{r}
-pdb_downloads <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
+pdb_downloads <- list.files(pdbs_path_slash, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
 
 pdb_missing <- setdiff(pdb_download_list, pdb_downloads)
 pdb_missing
 
 for (pdb_entry in pdb_missing) {
+  print(pdb_entry)
   tryCatch({
     pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
     write.pdb(pdb = pdb_object, file = paste0(pdbs_path, pdb_entry, ".pdb"))
@@ -155,28 +156,24 @@ fasta_content_list <- c()
 for(pdb_entry in pdb_downloads) {
   print(pdb_entry)
   
-  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb")
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
-  if (file.exists(pdb_file)) {
-    pdb_object <- tryCatch({
-      read.pdb(file = pdb_file, rm.alt = FALSE)
-    }, error = function(e) {
-      print(paste("Error reading file:", pdb_file, "- Trying to read from pdb_entry:", pdb_entry))
-      return(read.pdb(pdb_entry, rm.alt = FALSE))
-    })
-  } else {
-    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  if (is.null(pdb_object)) {
+    message("Skipping ", pdb_entry, " due to failed PDB retrieval.")
+    next
   }
   
-  if (is.null(pdbseq(pdb_object))) {
-    print(paste("Missing pdbseq:", pdb_file, "- Trying to read from pdb_entry:", pdb_entry))
-    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
-  }
-  
-  fasta_sequence <- pdbseq(pdb_object) %>% 
-    enframe(name = "resno", value = "residue") %>%
-    distinct(resno, .keep_all = TRUE) %>% 
-    pull(residue) %>%
+  fasta_sequence <- pdb_object$seqres %>%
+    enframe(name = "chain", value = "resid") %>%
+    add_count(chain, name = "chain_length") %>%
+    group_by(chain) %>%
+    mutate(resid = aa321(resid),
+           position = row_number()) %>%
+    filter(resid %in% names(AMINO_ACID_CODE)[1:20]) %>%
+    arrange(desc(chain_length), chain) %>%
+    filter(chain_length == max(chain_length)) %>% 
+    filter(chain == min(chain)) %>% #in case of tie, choose lowest alphabetically
+    pull(resid) %>%
     str_c(collapse = "")
   
   fasta_content <- paste0(">", pdb_entry, "\n", fasta_sequence)
@@ -197,3 +194,18 @@ missing_fasta <- setdiff(pdb_downloads,
 missing_fasta
 ```
 
+# Alphafold 3 structures
+Here we predict the Alphafold 3 structures based on the recombinant sequences from the protein panel, to more easily use the alphafold server we create a .json file with all of the sequences.  
+```{r}
+library(jsonlite)
+```
+
+
+```{r}
+# Define input and output paths
+fasta_file <- "data/fasta/sp_recombinant_protein_sequences.fasta"
+output_json_file <- "output/AlphaFold3/sp_recombinant_protein_sequences.json"
+
+json_data <- generate_json(fasta_file)
+write_json_file(json_data, output_json_file)
+```

@@ -118,7 +118,49 @@ prediction.viewer <- function(pdb_entry, directory, chain, sele_color_df=NULL) {
   return(view)
 }
 
-#AlphaFold3 functions
+#Read PDB 
+read.pdb.custom <- function(pdb_entry, pdb_path = NULL) {
+  if (!is.null(pdb_path)) {
+    pdb_file <- paste0(pdb_path, pdb_entry, ".pdb")
+  } else {
+    pdb_file <- paste0(pdb_entry, ".pdb") 
+  }
+  
+  pdb_object <- NULL  # Default return value
+  
+  if (file.exists(pdb_file)) {
+    pdb_object <- tryCatch({
+      read.pdb(file = pdb_file, rm.alt = FALSE)
+    }, error = function(e) {
+      message("Error reading file: ", pdb_file, " - Trying to load PDB entry, ", pdb_entry, ", from web.")
+      return(NULL)  
+    })
+  } 
+  
+  if (is.null(pdb_object)) {  # If local file fails, attempt to fetch from the web
+    pdb_object <- tryCatch({
+      read.pdb(pdb_entry, rm.alt = FALSE)
+    }, error = function(e) {
+      message("Error reading PDB entry: ", pdb_entry, "- Failed to load from web, returning NULL")
+      return(NULL)
+    })
+  }
+  
+  if (!is.null(pdb_object) && is.null(pdbseq(pdb_object))) {
+    print(paste("Missing pdbseq:", pdb_entry, "- Retrying to load from web using PDB entry:", pdb_entry))
+    pdb_object <- tryCatch({
+      read.pdb(pdb_entry, rm.alt = FALSE)
+    }, error = function(e) {
+      message("Retry failed for PDB entry: ", pdb_entry, "- Returning NULL")
+      return(NULL)
+    })
+  }
+  
+  return(pdb_object)
+}
+
+#Sequence alignment
+## convert .gb to .fasta for MSA
 gb2fasta <- function(gb_file_path, output_dir = NULL) {
   gb_lines <- readLines(gb_file_path)
   short_name <- sub(
@@ -150,5 +192,78 @@ gb2fasta <- function(gb_file_path, output_dir = NULL) {
     fasta_content[[i]] <- paste0(">",header_prefix,"_", header, "\n", protein_sequence)
   }
   
-  writeLines(unlist(fasta_content), paste0(output_dir,gb_file,"_msa_sequences.fasta"))
+  writeLines(unlist(fasta_content), paste0(output_dir,short_name,"_msa_sequences.fasta"))
+}
+
+#AlphaFold3
+
+parse_fasta <- function(fasta_file) {
+  if (!file.exists(fasta_file)) {
+    stop("Error: FASTA file does not exist at the specified path: ", fasta_file)
+  }
+  
+  fasta_lines <- readLines(fasta_file)  
+  sequences <- list()
+  
+  current_name <- NULL
+  current_sequence <- ""
+  
+  for (line in fasta_lines) {
+    if (startsWith(line, ">")) {  
+      if (!is.null(current_name)) {
+        
+        sequences <- append(sequences, list(list(name = current_name, sequence = current_sequence)))
+      }
+      current_name <- substr(line, 2, nchar(line))  
+      current_sequence <- ""  
+    } else {
+      current_sequence <- paste0(current_sequence, line)  
+    }
+  }
+  
+  
+  if (!is.null(current_name)) {
+    sequences <- append(sequences, list(list(name = current_name, sequence = current_sequence)))
+  }
+  
+  return(sequences)
+}
+
+# Function to generate the correct JSON structure
+generate_json <- function(fasta_file, suffix = "recombinant protein") {
+  sequences <- parse_fasta(fasta_file)
+  
+  json_data <- lapply(sequences, function(seq_data) {
+    
+    clean_name <- sub("([^(\\s]+)(\\s|\\().*", "\\1", seq_data$name)
+    clean_name <- gsub("\\s+", "", clean_name)
+    clean_name <- paste(clean_name, suffix)
+    
+    list(
+      name = as.character(clean_name),  
+      modelSeeds = list(),  
+      sequences = list(
+        list(
+          proteinChain = list(
+            sequence = as.character(seq_data$sequence),  
+            count = 1 
+          )
+        )
+      )
+    )
+  })
+  
+  return(json_data)
+}
+
+
+# Function to write the JSON data to a file
+write_json_file <- function(json_data, output_file) {
+  output_dir <- dirname(output_file)
+  
+  if (!dir.exists(output_dir)) {
+    dir.create(output_dir, recursive = TRUE)
+  }
+  
+  write_json(json_data, output_file, pretty = TRUE, auto_unbox = TRUE) #auto_unbox is very important as otherwise the Alphafoldserver will not except the .json
 }
