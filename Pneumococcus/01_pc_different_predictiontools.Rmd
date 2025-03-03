@@ -525,6 +525,78 @@ data_predictions_normalized <- data_predictions %>%
 data_predictions_normalized
 ```
 
+###track
+```{r}
+track_list <- c(
+  "BepiPred-2.0 probability", 
+  # "RSA NetsurfP", 
+  "BepiPred-3.0 score",
+  # "BepiPred-3.0 linear epitope score", 
+  # "DiscoTope-3.0_score",
+  "DiscoTope-3.0_calibrated_score", 
+  # "RSA Shrake-Rupley", 
+  "Epigraph_score"
+)
+
+for (pdb_entry in unique(data_predictions_normalized$PDB)) {
+  data_predictions_subset <- data_predictions %>%
+    filter(PDB == pdb_entry) 
+  
+  proteinname <- unique(data_predictions_subset$proteinname)
+  
+  for (chain_index in unique(data_predictions_subset$chain)) {
+    
+    data_predictions_subset_long <- data_predictions_subset %>%
+      filter(chain == chain_index) %>%
+      pivot_longer(cols = track_list, 
+                   names_to = "Score_Type", values_to = "Score_Value") %>%
+      group_by(Score_Type) %>%
+      mutate(normalized_score = case_when(
+        Score_Type == "BepiPred-2.0 probability" ~ Score_Value,
+        TRUE ~ rescale(Score_Value, to = c(0, 1))
+        )
+      )
+    
+    figure <- data_predictions_subset_long %>%
+      ggplot(aes(x=resno, y=Score_Value, fill = normalized_score)) +
+      geom_col() +
+      
+      facet_wrap(~Score_Type, ncol = 1, scales = "free_y") +
+      
+      scale_fill_gradient2(low = "blue", mid = "gray95", high = "red", 
+                           midpoint = 0.5) +  # Now uses median per facet
+      
+      geom_text(aes(label = Score_Type, 
+                    x = (min(resno) + (max(resno) - min(resno)) / 2)), 
+                color = "black", y = Inf, vjust = 1.5, size = 4, family = "Arial", 
+                check_overlap = TRUE) +
+      
+      labs(title = paste0(pdb_entry, " chain ", chain_index, " (",proteinname,")")) +
+      
+      theme_minimal() +
+      theme(
+        strip.text = element_blank(),
+        axis.ticks = element_blank(),  
+        axis.ticks.x = element_blank(),  
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_blank(),  
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+      )
+    
+    print(figure)
+    
+    ggsave(filename = paste0("output/figures/tracks/", pdb_entry, "_", chain_index, "_track.png"), 
+           plot = figure, 
+           width = 14, height = 10, dpi = 300,
+           bg="white")
+  }
+}
+```
+
+
+###heatmap
 ```{r, fig.width = 14}
 for (pdb_entry in unique(data_predictions_normalized$PDB)) {
   data_predictions_normalised_subset <- data_predictions_normalized %>%
@@ -1016,7 +1088,11 @@ for (pdb_entry in unique(data_predictions_with_variability$PDB)) {
   pivot_longer(cols = pivot_list, 
   names_to = "Score_Type", values_to = "Score_Value") %>%
     group_by(Score_Type) %>%
-    mutate(normalized_score = rescale(Score_Value, to = c(0, 1))) #required to get the colouring on a per score type basis
+    mutate(normalized_score = case_when(
+        Score_Type == "BepiPred-2.0 probability" ~ Score_Value,
+        TRUE ~ rescale(Score_Value, to = c(0, 1))
+        )
+    )
   
   plot <- data_subset %>%
     ggplot(aes(x=resno, y=normalized_score, fill = normalized_score)) +
@@ -1084,4 +1160,105 @@ pheatmap(t(data_test_wide),
          clustering_distance_rows = "correlation") 
 ```
 
+# Convert AlphaFold3 .cif to .pdb files
 
+```{r}
+AlphaFold3_zip_files <- list.files(path = "output/AlphaFold3/", pattern = "\\.zip$")
+
+for (zip_file in AlphaFold3_zip_files) {
+  unzip(zipfile = paste0("output/AlphaFold3/",zip_file), exdir = "output/AlphaFold3/individual_files/")
+}
+```
+
+```{r}
+AlphaFold3_folders <- list.dirs(path = "output/AlphaFold3/individual_files", full.names = FALSE, recursive = FALSE)
+
+AlphaFold3_folders
+```
+
+```{r, fig.width=14, warning=FALSE}
+for (AlphaFold3_folder in AlphaFold3_folders) {
+  folder_path <- paste0("output/AlphaFold3/individual_files/", AlphaFold3_folder)
+  cif_file_paths <- list.files(path = folder_path, pattern = "\\.cif$", full.names=TRUE)
+  
+  atom_df_cif <- NULL
+  
+  for (cif_file in cif_file_paths) {
+    #print(cif_file)
+    file_name <- sub("\\.cif$", "", basename(cif_file))
+    
+    protein_name <- gsub(".*_(.*?)_.*", "\\1", file_name)
+    fold_number <- gsub(".*_(\\d+)$", "\\1", file_name)
+    
+    cif_object <- read.cif(cif_file)
+    
+    cif_df <- cif_object$atom %>%
+      mutate(fold_number = fold_number)
+    
+    atom_df_cif <- bind_rows(atom_df_cif, cif_df)
+  }
+  
+  atom_df_cif %<>%
+    group_by(fold_number) %>%
+    mutate(mean_b = mean(b))
+  
+  print(atom_df_cif)
+  
+  plot <- atom_df_cif %>%
+    ggplot(aes(x=fold_number, y=b)) +
+    geom_violin(fill = "steelblue", alpha = 0.7, color = "black") +  # Violin plot
+    geom_boxplot(width = 0.1, color = "black", outlier.shape = NA) + # Boxplot inside violin
+    #facet_wrap(~fold_number, nrow = 1) +
+    labs(title = paste0(protein_name,"\npLDDT Score Distribution"), x = "fold number", y = "pLDDT") +
+    theme_minimal() +
+    theme(text = element_text(size = 14))
+  
+  print(plot)
+}
+```
+```{r}
+cif_object$atom
+```
+
+
+## cif2pdb
+
+```{r, warning=FALSE}
+for (AlphaFold3_folder in AlphaFold3_folders) {
+  folder_path <- paste0("output/AlphaFold3/individual_files/", AlphaFold3_folder)
+  cif_file_paths <- list.files(path = folder_path, pattern = "\\.cif$", full.names=TRUE)
+  
+  atom_df_cif <- NULL
+  
+  for (cif_file in cif_file_paths) {
+    #print(cif_file)
+    file_name <- sub("\\.cif$", "", basename(cif_file))
+    
+    protein_name <- gsub(".*_(.*?)_.*", "\\1", file_name)
+    fold_number <- gsub(".*_(\\d+)$", "\\1", file_name)
+    
+    cif_object <- read.cif(cif_file)
+    
+    cif_df <- cif_object$atom %>%
+      mutate(fold_number = fold_number)
+    
+    atom_df_cif <- bind_rows(atom_df_cif, cif_df)
+  }
+  
+  highest_fold <- atom_df_cif %>%
+    group_by(fold_number) %>%
+    summarize(mean_b = mean(b)) %>%
+    arrange(desc(mean_b)) %>%
+    head(1) %>%
+    pull(fold_number)
+  
+  highest_cif_file <- cif_file_paths[grepl(paste0("_", highest_fold, "\\.cif$"), cif_file_paths)]
+  
+  #print(paste("Selected CIF file: ", highest_cif_file))
+  
+  # Read the CIF object of the selected file
+  highest_cif_object <- read.cif(highest_cif_file)
+  
+  write.pdb(highest_cif_object, file=paste0("output/AlphaFold3/generated_pdb/",protein_name,"_fold_",highest_fold,".pdb"))
+}
+```

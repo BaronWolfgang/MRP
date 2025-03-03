@@ -15,7 +15,6 @@ map.seqposno.to.resno <- function(sequence_AA1, pdb_object, verbose=FALSE, type=
   
   # Extract the aligned sequences
   aligned_pattern <- alignedPattern(alignment)
-  #first_10_residues_pattern <- substr(as.character(aligned_pattern), 1, 10)
   residues_up_to_gap <- str_extract(as.character(aligned_pattern), "^[^-]*")
   
   shift <- str_locate(subject_seq, residues_up_to_gap)[1]
