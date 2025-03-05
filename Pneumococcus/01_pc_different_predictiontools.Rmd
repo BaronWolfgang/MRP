@@ -38,7 +38,11 @@ for (package in BiocManager_packages_to_install) {
 
 #Functions
 ```{r}
-source("functions/mrp_pc_functions.R")
+function_files <- list.files(path = "functions", pattern = "\\.R$",full.names = TRUE)
+
+for (function_file in function_files) {
+  source(function_file)
+}
 ```
 
 #File paths
@@ -1176,6 +1180,7 @@ AlphaFold3_folders <- list.dirs(path = "output/AlphaFold3/individual_files", ful
 AlphaFold3_folders
 ```
 
+## plot per protein
 ```{r, fig.width=14, warning=FALSE}
 for (AlphaFold3_folder in AlphaFold3_folders) {
   folder_path <- paste0("output/AlphaFold3/individual_files/", AlphaFold3_folder)
@@ -1202,7 +1207,7 @@ for (AlphaFold3_folder in AlphaFold3_folders) {
     group_by(fold_number) %>%
     mutate(mean_b = mean(b))
   
-  print(atom_df_cif)
+  #print(atom_df_cif)
   
   plot <- atom_df_cif %>%
     ggplot(aes(x=fold_number, y=b)) +
@@ -1216,14 +1221,60 @@ for (AlphaFold3_folder in AlphaFold3_folders) {
   print(plot)
 }
 ```
+
+## plot all proteins with average
 ```{r}
-cif_object$atom
+atom_df_cif_wide <- NULL
+
+for (AlphaFold3_folder in AlphaFold3_folders[2]) {
+  folder_path <- paste0("output/AlphaFold3/individual_files/", AlphaFold3_folder)
+  cif_file_paths <- list.files(path = folder_path, pattern = "\\.cif$", full.names=TRUE)
+  
+  atom_df_cif_subset <- NULL
+  atom_df_cif_subset_wide <- NULL 
+  
+  for (cif_file in cif_file_paths) {
+    print(cif_file)
+    file_name <- sub("\\.cif$", "", basename(cif_file))
+    
+    protein_name <- gsub(".*_(.*?)_.*", "\\1", file_name)
+    fold_number <- gsub(".*_(\\d+)$", "\\1", file_name)
+    
+    cif_object <- read.cif(cif_file)
+    
+    cif_df <- cif_object$atom %>%
+      mutate(protein = protein_name,
+             fold_number = fold_number)
+    
+    atom_df_cif_subset <- bind_rows(atom_df_cif_subset, cif_df)
+  }
+  
+  # Apply pivot_wider AFTER accumulating all folds for a single protein
+  atom_df_cif_subset_wide <- atom_df_cif_subset %>%
+    pivot_wider(names_from = fold_number, values_from = b, names_prefix = "Fold_") %>%
+    mutate(Fold_average = rowMeans(select(., starts_with("Fold_")), na.rm = TRUE))
+  
+  # Append to atom_df_cif_wide after ensuring the structure is correct
+  atom_df_cif_wide <- bind_rows(atom_df_cif_wide, atom_df_cif_subset_wide)
+}
+
+# Check final structure
+print(atom_df_cif_wide)
+
+plot <- atom_df_cif_wide %>%
+    ggplot(aes(x=protein, y=b)) +
+    geom_violin(fill = "steelblue", alpha = 0.7, color = "black") +  # Violin plot
+    geom_boxplot(width = 0.1, color = "black", outlier.shape = NA) + # Boxplot inside violin
+    facet_wrap(~protein, nrow = 1) +
+    labs(title = paste0(protein_name,"\npLDDT Score Distribution"), x = "fold number", y = "pLDDT") +
+    theme_minimal() +
+    theme(text = element_text(size = 14))
+  
+  print(plot)
 ```
 
-
-## cif2pdb
-
-```{r, warning=FALSE}
+## read.cif
+```{r}
 for (AlphaFold3_folder in AlphaFold3_folders) {
   folder_path <- paste0("output/AlphaFold3/individual_files/", AlphaFold3_folder)
   cif_file_paths <- list.files(path = folder_path, pattern = "\\.cif$", full.names=TRUE)
@@ -1231,13 +1282,12 @@ for (AlphaFold3_folder in AlphaFold3_folders) {
   atom_df_cif <- NULL
   
   for (cif_file in cif_file_paths) {
-    #print(cif_file)
     file_name <- sub("\\.cif$", "", basename(cif_file))
     
     protein_name <- gsub(".*_(.*?)_.*", "\\1", file_name)
     fold_number <- gsub(".*_(\\d+)$", "\\1", file_name)
     
-    cif_object <- read.cif(cif_file)
+    cif_object <- read.cif.custom(cif_file)
     
     cif_df <- cif_object$atom %>%
       mutate(fold_number = fold_number)
@@ -1254,11 +1304,12 @@ for (AlphaFold3_folder in AlphaFold3_folders) {
   
   highest_cif_file <- cif_file_paths[grepl(paste0("_", highest_fold, "\\.cif$"), cif_file_paths)]
   
-  #print(paste("Selected CIF file: ", highest_cif_file))
+  print(paste("Selected CIF file: ", highest_cif_file))
   
   # Read the CIF object of the selected file
-  highest_cif_object <- read.cif(highest_cif_file)
+  highest_cif_object <- read.cif.custom(highest_cif_file)
   
   write.pdb(highest_cif_object, file=paste0("output/AlphaFold3/generated_pdb/",protein_name,"_fold_",highest_fold,".pdb"))
 }
 ```
+

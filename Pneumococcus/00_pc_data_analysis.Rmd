@@ -38,7 +38,11 @@ for (package in BiocManager_packages_to_install) {
 
 #Functions
 ```{r}
-source("functions/mrp_pc_functions.R")
+function_files <- list.files(path = "functions", pattern = "\\.R$",full.names = TRUE)
+
+for (function_file in function_files) {
+  source(function_file)
+}
 ```
 
 
@@ -206,6 +210,6 @@ library(jsonlite)
 fasta_file <- "data/fasta/sp_recombinant_protein_sequences.fasta"
 output_json_file <- "output/AlphaFold3/sp_recombinant_protein_sequences.json"
 
-json_data <- generate_json(fasta_file)
+json_data <- generate_json(fasta_file, suffix = "recombinant protein")
 write_json_file(json_data, output_json_file)
 ```
