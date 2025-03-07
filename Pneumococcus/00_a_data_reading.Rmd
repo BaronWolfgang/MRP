@@ -7,38 +7,12 @@ output: html_document
 
 #Packages
 ```{r}
-data_management_packages_to_install <- c("data.table", "tidyverse" ,"readxl","purrr","readr","scales","msa")
-data_visualisation_packages_to_install <- c("ggplot2","cowplot","pheatmap","viridisLite","ggseqlogo")
-structural_packages_to_install <- c("bio3d","NGLVieweR", "htmlwidgets","htmltools")
-
-packages_to_install <- c(data_management_packages_to_install, 
-                         data_visualisation_packages_to_install,
-                         structural_packages_to_install)
-
-# Check and install packages using a for loop
-for (package in packages_to_install) {
-  if (!requireNamespace(package, quietly = TRUE)) {
-    install.packages(package)
-  }
-  library(package, character.only = TRUE)
-}
-
-BiocManager_packages_to_install <- c("Biostrings","pwalign")
-
-if (!require("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
-
-for (package in BiocManager_packages_to_install) {
-  if (!requireNamespace(package, quietly = TRUE)) {
-    BiocManager::install(package)
-  }
-  library(package, character.only = TRUE)
-}
+source("requirements/packages.R")
 ```
 
 #Functions
 ```{r}
-function_files <- list.files(path = "functions", pattern = "\\.R$",full.names = TRUE)
+function_files <- list.files(path = "requirements/functions", pattern = "\\.R$",full.names = TRUE)
 
 for (function_file in function_files) {
   source(function_file)
@@ -69,17 +43,7 @@ data_proteinpanel <- rbind(
 data_proteinpanel
 ```
 
-```{r}
-colnames(data_proteinpanel)
-```
-
-
-```{r}
-data_proteinpanel %>%
-  select("Proteins (TIGR4)","AA sequence of recombinant protein")
-```
-
-# Create fasta    
+## Create fasta    
 ```{r}
 fasta_content <- apply(data_proteinpanel, 1, function(row) {
   paste0(">", row["Proteins (TIGR4)"]," ", row["Protein class"], "\n", row["AA sequence of recombinant protein"])
@@ -132,7 +96,7 @@ get.pdb(ids = pdb_download_list, path = pdbs_path, overwrite = TRUE)
 
 ## check missing pdb's and retry
 ```{r}
-pdb_downloads <- list.files(pdbs_path_slash, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
+pdb_downloads <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
 
 pdb_missing <- setdiff(pdb_download_list, pdb_downloads)
 pdb_missing
@@ -198,18 +162,3 @@ missing_fasta <- setdiff(pdb_downloads,
 missing_fasta
 ```
 
-# Alphafold 3 structures
-Here we predict the Alphafold 3 structures based on the recombinant sequences from the protein panel, to more easily use the alphafold server we create a .json file with all of the sequences.  
-```{r}
-library(jsonlite)
-```
-
-
-```{r}
-# Define input and output paths
-fasta_file <- "data/fasta/sp_recombinant_protein_sequences.fasta"
-output_json_file <- "output/AlphaFold3/sp_recombinant_protein_sequences.json"
-
-json_data <- generate_json(fasta_file, suffix = "recombinant protein")
-write_json_file(json_data, output_json_file)
-```

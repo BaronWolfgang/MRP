@@ -1,0 +1,315 @@
+---
+title: "Streptococcus pneumoniae data analysis"
+author: "Jan Paul van Meenen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+#Packages
+```{r}
+source("requirements/packages.R")
+```
+
+#Functions
+```{r}
+function_files <- list.files(path = "requirements/functions", pattern = "\\.R$",full.names = TRUE)
+
+for (function_file in function_files) {
+  source(function_file)
+}
+```
+
+# Alphafold 3 structures
+Here we predict the Alphafold 3 structures based on the recombinant sequences from the protein panel, to more easily use the alphafold server we create a .json file with all of the sequences.  
+```{r}
+# Define input and output paths
+fasta_file <- "data/fasta/sp_recombinant_protein_sequences.fasta"
+output_json_file <- "output/AlphaFold3/sp_recombinant_protein_sequences.json"
+
+json_data <- generate_json(fasta_file, suffix = "recombinant protein")
+write_json_file(json_data, output_json_file)
+```
+
+# Convert AlphaFold3 .cif to .pdb files
+```{r}
+AlphaFold3_zip_files <- list.files(path = "output/AlphaFold3/", pattern = "\\.zip$")
+
+for (zip_file in AlphaFold3_zip_files) {
+  unzip(zipfile = paste0("output/AlphaFold3/",zip_file), exdir = "output/AlphaFold3/individual_files/")
+}
+```
+
+```{r}
+AlphaFold3_folders <- list.dirs(path = "output/AlphaFold3/individual_files", full.names = FALSE, recursive = FALSE)
+
+last(AlphaFold3_folders)
+```
+
+
+## Convert cif files with highest average b-value per protein
+```{r}
+for (AlphaFold3_folder in AlphaFold3_folders) {
+  folder_path <- paste0("output/AlphaFold3/individual_files/", AlphaFold3_folder)
+  cif_file_paths <- list.files(path = folder_path, pattern = "\\.cif$", full.names=TRUE)
+  
+  atom_df_cif <- NULL
+  
+  for (cif_file in cif_file_paths) {
+    file_name <- sub("\\.cif$", "", basename(cif_file))
+    
+    protein_name <- gsub("fold_(.*?)_recombinant_protein.*", "\\1", file_name)
+    fold_number <- gsub(".*_(\\d+)$", "\\1", file_name)
+    
+    cif_object <- read.cif.custom(cif_file)
+    
+    cif_df <- cif_object$atom %>%
+      mutate(fold_number = fold_number)
+    
+    atom_df_cif <- bind_rows(atom_df_cif, cif_df)
+  }
+  
+  highest_fold <- atom_df_cif %>%
+    group_by(fold_number) %>%
+    summarize(mean_b = mean(b)) %>%
+    arrange(desc(mean_b)) %>%
+    head(1) %>%
+    pull(fold_number)
+  
+  highest_cif_file <- cif_file_paths[grepl(paste0("_", highest_fold, "\\.cif$"), cif_file_paths)]
+  
+  print(paste("Selected CIF file: ", highest_cif_file))
+  
+  # Read the CIF object of the selected file
+  highest_cif_object <- read.cif.custom(highest_cif_file)
+  
+  write.pdb(highest_cif_object, file=paste0("output/AlphaFold3/generated_pdb/",protein_name,"_fold_",highest_fold,".pdb"))
+}
+```
+
+
+## combine all into one df
+```{r}
+data_AF3_recombinant <- NULL
+
+for (AlphaFold3_folder in AlphaFold3_folders) {
+  folder_path <- paste0("output/AlphaFold3/individual_files/", AlphaFold3_folder)
+  cif_file_paths <- list.files(path = folder_path, pattern = "\\.cif$", full.names=TRUE)
+  
+  for (cif_file in cif_file_paths) {
+    file_name <- sub("\\.cif$", "", basename(cif_file))
+    
+    print(file_name)
+    
+    protein_name <- gsub("fold_(.*?)_recombinant_protein.*", "\\1", file_name)
+    fold_number <- gsub(".*_(\\d+)$", "\\1", file_name)
+    
+    cif_object <- read.cif.custom(cif_file)
+    
+    cif_df <- cif_object$atom %>%
+      mutate(protein = protein_name,
+             fold_number = fold_number)
+    
+    data_AF3_recombinant <- bind_rows(data_AF3_recombinant, cif_df)
+  }
+}
+
+data_AF3_recombinant
+```
+
+```{r}
+write.csv(data_AF3_recombinant,
+          "output/AlphaFold3/data_AF3_recombinant.csv", 
+          row.names = FALSE)
+```
+
+
+### highest only
+```{r}
+recombinant_pdb_files_list <- list.files(path="output/AlphaFold3/generated_pdb/",pattern=".pdb", )
+recombinant_pdb_files_list
+
+data_AF3_recombinant_highest <- NULL
+
+for (pdb_file in recombinant_pdb_files_list) {
+  protein_name <- gsub("(.*?)_fold.*", "\\1", pdb_file)
+  print(protein_name)
+
+  pdb_object <- read.pdb(file =  paste0("output/AlphaFold3/generated_pdb/",pdb_file))
+  
+  atom_df_subset <- pdb_object$atom %>%
+    mutate(protein = protein_name)
+  
+  data_AF3_recombinant_highest <- rbind(data_AF3_recombinant_highest, atom_df_subset)
+}
+
+data_AF3_recombinant_highest
+```
+
+
+## plot per protein
+```{r, fig.width=14, warning=FALSE}
+for (protein in unique(data_AF3_recombinant$protein)) {
+  
+  atom_subset <- data_AF3_recombinant %>% filter(protein == protein)
+
+  plot <- atom_subset %>%
+    ggplot(aes(x=fold_number, y=b)) +
+    geom_violin(fill = "steelblue", alpha = 0.7, color = "black") +  # Violin plot
+    geom_boxplot(width = 0.1, color = "black", outlier.shape = NA) + # Boxplot inside violin
+    facet_wrap(~fold_number, nrow = 1) +
+    labs(title = paste0(protein_name,"\npLDDT Score Distribution"), x = "fold number", y = "pLDDT") +
+    scale_y_continuous(limits = c(NA, 100)) +
+    theme_minimal() +
+    theme(text = element_text(size = 14))
+  
+  print(plot)
+}
+```
+
+## plot average pLDDTs of all proteins for highest average fold.
+```{r}
+data_AF3_recombinant_highest %>%
+  group_by(protein) %>%
+  summarize(average_b = mean(b)) %>%
+  ggplot(aes(x="", y=average_b)) +
+  geom_violin(fill = "steelblue", alpha = 0.7, color = "black") +  # Violin plot
+  geom_boxplot(width = 0.1, color = "black", outlier.shape = NA) + # Boxplot inside violin
+  #facet_wrap(~fold_number, nrow = 1) +
+  scale_y_continuous(limits = c(NA, 100)) +
+  labs(title = paste0("average pLDDT score distribution"), x = "", y = "pLDDT") +
+  theme_minimal() +
+  theme(text = element_text(size = 14))
+  
+```
+
+```{r}
+data_AF3_recombinant_highest %>%
+  filter(elety == "CA") %>%
+  group_by(protein) %>%
+  summarize(average_b = mean(b)) %>%
+  ggplot(aes(x="", y=average_b)) +
+  geom_violin(fill = "steelblue", alpha = 0.7, color = "black") +  # Violin plot
+  geom_boxplot(width = 0.1, color = "black", outlier.shape = NA) + # Boxplot inside violin
+  scale_y_continuous(limits = c(NA, 100)) +
+  labs(title = paste0("average pLDDT score distribution CA only"), x = "", y = "pLDDT") +
+  theme_minimal() +
+  theme(text = element_text(size = 14))
+```
+
+## join folds to Protein class
+```{r, fig.width=14}
+data_AF3_recombinant_highest_with_class <- data_AF3_recombinant_highest %>%
+  filter(elety == "CA") %>%
+  group_by(protein) %>%
+  summarize(average_b = mean(b)) %>%
+  arrange(desc(average_b)) %>%
+  full_join(data_proteinpanel %>%
+                         mutate(
+                           clean_proteinname = gsub(" ","",tolower(gsub("\\(.*\\)", "", `Proteins (TIGR4)`)))
+                           ) %>%
+                         select(`Protein class`, clean_proteinname), 
+                       by = c("protein" = "clean_proteinname"), keep = TRUE) 
+
+group_order_median <- data_AF3_recombinant_highest_with_class %>% 
+  group_by(`Protein class`) %>%
+  summarize(group_average_b = median(average_b)) %>%
+  arrange(desc(group_average_b)) %>%
+  pull(`Protein class`)
+
+data_AF3_recombinant_highest_with_class %>%
+  ggplot(aes(x=average_b, y=reorder(protein, average_b), fill = factor(`Protein class`, levels = group_order_median))) +
+  geom_col() +
+  geom_vline(xintercept=80) +
+  labs(title = "Protein Ranking by Average pLDDT Score",
+       x = "Average pLDDT Score",
+       y = "Protein",
+       fill = "Protein Class (median sorted)") +
+  theme_minimal() 
+
+group_order_mean <- data_AF3_recombinant_highest_with_class %>% 
+  group_by(`Protein class`) %>%
+  summarize(group_average_b = mean(average_b)) %>%
+  arrange(desc(group_average_b)) %>%
+  pull(`Protein class`)
+
+data_AF3_recombinant_highest_with_class %>%
+  ggplot(aes(x=average_b, y=reorder(protein, average_b), fill = factor(`Protein class`, levels = group_order_mean))) +
+  geom_col() +
+  geom_vline(xintercept=80) +
+  labs(title = "Protein Ranking by Average pLDDT Score",
+       x = "Average pLDDT Score",
+       y = "Protein",
+       fill = "Protein Class (mean sorted)") +
+  theme_minimal()
+```
+
+```{r, fig.width=14}
+data_AF3_recombinant_highest_with_class %>%
+  ggplot(aes(x = average_b, 
+             fill = factor(`Protein class`, levels = group_order_mean),
+             color = factor(`Protein class`, levels = group_order_mean))) +
+  geom_density(alpha = 0.3) +
+  #scale_fill_viridis_d(option = "plasma") + 
+  labs(title = "Distribution of Average pLDDT Score by Protein Class",
+       x = "Average pLDDT Score",
+       y = "Density",
+       fill = "Protein Class",
+       color = "Protein Class",
+       linetype = "Quantity") +
+  scale_x_continuous(limits = c(NA, 100)) +
+  #facet_wrap(~`Protein class`, scales = "free_y") +
+  
+  geom_vline(data = data_AF3_recombinant_highest_with_class %>%
+               group_by(`Protein class`) %>%
+               summarise(mean_b = median(average_b, na.rm = TRUE)),
+             aes(xintercept = mean_b, color=factor(`Protein class`, levels = group_order_mean), linetype = "Median"),
+              size= 1) +
+  geom_vline(data = data_AF3_recombinant_highest_with_class %>%
+               group_by(`Protein class`) %>%
+               summarise(mean_b = mean(average_b, na.rm = TRUE)),
+             aes(xintercept = mean_b, color=factor(`Protein class`, levels = group_order_mean), linetype = "Mean"),
+              size= 1) +
+  scale_linetype_manual(values = c("Mean" = "dashed", "Median" = "solid")) +
+  
+  guides(fill = guide_legend(override.aes = list(alpha = 0.5), order=1),  # Overlapping legends
+         color = guide_legend(override.aes = list(alpha = 0.5), order=1),  # Overlapping legends
+         linetype = guide_legend(order = 2)) +
+  theme_minimal() 
+```
+
+```{r, fig.width=14}
+data_AF3_recombinant_highest_with_class %>%
+  ggplot(aes(x = average_b, 
+             fill = factor(`Protein class`, levels = group_order_mean),
+             color = factor(`Protein class`, levels = group_order_mean)
+             )
+         ) +
+  geom_histogram(alpha = 0.5, bins=25) +
+  #scale_fill_viridis_d(option = "plasma") + 
+  labs(title = "Distribution of Average pLDDT Score by Protein Class",
+       x = "Average pLDDT Score",
+       y = "Density",
+       fill = "Protein Class",
+       color = "Protein Class",
+       linetype = "Quantity") +
+  scale_x_continuous(limits = c(NA, 100)) +
+  #facet_wrap(~`Protein class`, scales = "free_y") +
+  
+  #geom_vline(data = data_AF3_recombinant_highest_with_class %>%
+  #             group_by(`Protein class`) %>%
+  #             summarise(mean_b = median(average_b, na.rm = TRUE)),
+  #           aes(xintercept = mean_b, color=factor(`Protein class`, levels = group_order_mean), linetype = "Median"),
+  #            size= 1) +
+  #geom_vline(data = data_AF3_recombinant_highest_with_class %>%
+  #             group_by(`Protein class`) %>%
+  #             summarise(mean_b = mean(average_b, na.rm = TRUE)),
+  #           aes(xintercept = mean_b, color=factor(`Protein class`, levels = group_order_mean), linetype = "Mean"),
+  #            size= 1) +
+  #scale_linetype_manual(values = c("Mean" = "dashed", "Median" = "solid")) +
+  
+  guides(fill = guide_legend(override.aes = list(alpha = 0.5), order=1),  # Overlapping legends
+         color = guide_legend(override.aes = list(alpha = 0.5), order=1),  # Overlapping legends
+         linetype = guide_legend(order = 2)) +
+  theme_minimal() 
+```
+

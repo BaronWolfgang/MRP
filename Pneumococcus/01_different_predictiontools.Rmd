@@ -1,0 +1,338 @@
+---
+title: "Streptococcus pneumoniae epitope prediction tools"
+author: "Jan Paul van Meenen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+#Packages
+```{r}
+source("requirements/packages.R")
+```
+
+#Functions
+```{r}
+function_files <- list.files(path = "requirements/functions", pattern = "\\.R$",full.names = TRUE)
+
+for (function_file in function_files) {
+  source(function_file)
+}
+```
+
+# BepiPred-2.0
+## split fasta into parts
+BepiPred-2.0 only allows for 50 proteins at a time.
+```{r}
+fasta_lines <- readLines("data/fasta/pdb_protein_sequences.fasta")
+
+# Group lines into proteins based on `>...` headers
+protein_entries <- split(fasta_lines, cumsum(grepl("^>", fasta_lines)))
+
+# Split protein entries into chunks of 50
+protein_chunks <- split(protein_entries, ceiling(seq_along(protein_entries) / 50))
+
+for (i in seq_along(protein_chunks)) {
+  # Combine lines for each chunk
+  chunk_lines <- unlist(protein_chunks[[i]])
+  
+  # Write the chunk to a new file
+  writeLines(chunk_lines, paste0("data/fasta/pdb_protein_sequences_part_", i, ".fasta"))
+}
+
+```
+
+https://services.healthtech.dtu.dk/services/BepiPred-2.0/ 
+```{r}
+data_BepiPred_2 <- rbind(
+    read_csv("output/BepiPred2.0/BepiPred_part1_summary_67C1B456000FBFBBD072AA59.csv"),
+    read_csv("output/BepiPred2.0/BepiPred_part2_summary_67C1B4C8000FC0D59FA5D3FB.csv")
+    ) 
+```
+
+## Generalized
+### get valid all pdb entires and files
+```{r}
+pdbs_path = "data/pdb/"
+
+pdb_files_list <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
+
+pdb_files_list
+```
+
+## BepiPred-2.0 with resno
+```{r}
+data_BepiPred_2_with_resno <- NULL
+
+for (pdb_entry in pdb_files_list) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  required_adjustment <- map.seqresno.to.resno(pdb_object)
+  #print(required_adjustment)
+  
+  resmap <- create.resmap(pdb_object$atom, 
+                                           data_BepiPred_2 %>% filter(Entry == pdb_entry),
+                                           required_adjustment)
+  
+  if (is.null(data_BepiPred_2_with_resno)) {
+    data_BepiPred_2_with_resno <- resmap
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_BepiPred_2_with_resno <- rbind(data_BepiPred_2_with_resno, resmap)
+  }
+}
+
+data_BepiPred_2_with_resno
+```
+
+## Store results as csv
+```{r}
+write.csv(data_BepiPred_2_with_resno,
+          "output/BepiPred2.0/data_BepiPred2.csv", 
+          row.names = FALSE)
+```
+
+
+
+# BepiPred-3.0 results
+https://services.healthtech.dtu.dk/services/BepiPred-3.0/
+```{r}
+data_BepiPred_3 <- rbind(
+    read_csv("output/BepiPred3.0/raw_output_part1_0228.csv"),
+    read_csv("output/BepiPred3.0/raw_output_part2_0228.csv")
+    ) %>%
+  #mutate(Residue = aa123(Residue)) %>%
+  group_by(Accession) %>%
+  mutate(Position = row_number())
+```
+
+## BepiPred-3.0 with resno
+```{r}
+data_BepiPred_3_with_resno <- NULL
+
+for (pdb_entry in pdb_files_list) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  required_adjustment <- map.seqresno.to.resno(pdb_object)
+  #print(required_adjustment)
+  
+  resmap <- create.resmap(pdb_object$atom, 
+                                           data_BepiPred_3 %>% filter(Accession == pdb_entry),
+                                           required_adjustment)
+  
+  if (is.null(data_BepiPred_3_with_resno)) {
+    data_BepiPred_3_with_resno <- resmap
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_BepiPred_3_with_resno <- rbind(data_BepiPred_3_with_resno, resmap)
+  }
+}
+
+data_BepiPred_3_with_resno
+```
+
+## Store results as csv
+```{r}
+write.csv(data_BepiPred_3_with_resno,
+          "output/BepiPred3.0/data_BepiPred3.csv", 
+          row.names = FALSE)
+```
+
+# DiscoTope-3.0
+https://services.healthtech.dtu.dk/services/DiscoTope-3.0/
+```{r}
+csv_files <- list.files("output/DiscoTope", pattern = "*.csv", full.names = TRUE)
+
+data_DiscoTope <- NULL
+
+for (csv_file in csv_files) {
+  temp_data <- read_csv(csv_file, show_col_types = FALSE) 
+  
+  if (is.null(data_DiscoTope)) {
+    data_DiscoTope <- temp_data
+  } else {
+    data_DiscoTope <- rbind(data_DiscoTope, temp_data)
+  }
+}
+
+data_DiscoTope <- data_DiscoTope %>%
+  mutate(pdb = gsub("_.*", "", pdb),
+         resno = res_id)
+
+data_DiscoTope
+```
+
+## Store results as csv
+```{r}
+write.csv(data_DiscoTope,
+          "output/DiscoTope/data_DiscoTope.csv", 
+          row.names = FALSE)
+```
+
+# Epigraph
+http://epigraph.kaist.ac.kr/
+```{r}
+epigraph_zip_files <- list.files(path = "output/EpiGraph/individual_files/", pattern = "\\.zip$")
+
+for (zip_file in epigraph_zip_files) {
+  unzip(zipfile = paste0("output/EpiGraph/individual_files/",zip_file), exdir = "output/EpiGraph/individual_files/")
+}
+
+epigraph_csv_files <- list.files(path = "output/EpiGraph/individual_files/", pattern = "\\.csv$")
+epigraph_csv_files
+```
+
+```{r}
+data_Epigraph <- NULL
+
+for (csv_file in epigraph_csv_files) {
+  temp_data <- read_csv(paste0("output/EpiGraph/individual_files/",csv_file), show_col_types = FALSE) 
+  print(csv_file)
+  
+  if (is.null(data_Epigraph)) {
+    data_Epigraph <- temp_data
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_Epigraph <- rbind(data_Epigraph, temp_data)
+  }
+}
+
+data_Epigraph <- data_Epigraph %>% 
+  separate(Residue, into = c("chain", "resid", "resno"), sep = ":", convert = TRUE) %>%
+  mutate(PDB = toupper(PDB))
+
+data_Epigraph
+```
+
+```{r}
+data_Epigraph_subset <- data_Epigraph %>% filter(PDB == "3ZPP")
+
+plot_epigraph <- data_Epigraph_subset %>% 
+    ggplot(aes(x=resno, y=Score, fill=Score)) +
+    geom_col(width = 1,) +
+    scale_fill_gradient2(low = "blue", mid = "gray95", high = "red") +  
+    theme_minimal() + 
+    theme(
+      axis.text.y = element_blank(),   
+      axis.title.y = element_blank(),  
+      axis.ticks.y = element_blank()
+    ) +
+    labs(fill = "EpiGraph prediction")
+
+plot_epigraph
+```
+
+## Store results as csv
+```{r}
+write.csv(data_Epigraph,
+          "output/EpiGraph/data_Epigraph.csv", 
+          row.names=FALSE)
+```
+
+#(WIP) GraphBepi
+Lookup the longest chain per protein
+```{r}
+data_DiscoTope %>%
+  filter(residue %in% names(AMINO_ACID_CODE)[1:20]) %>%
+  select(pdb, chain, length) %>%
+  pivot_wider(names_from = chain, values_from = length) %>%
+  mutate(across(where(is.list), ~sapply(., function(x) ifelse(is.null(x), NA, length(x)))))
+```
+
+Visually check all chains per protein
+```{r}
+for (pdb_entry in unique(data_DiscoTope$pdb)) {
+  print(pdb_entry)
+  data_DiscoTope_subset <- data_DiscoTope %>% filter(pdb == pdb_entry)
+  
+  plot <- data_DiscoTope_subset %>%
+    ggplot(aes(x=res_id, colour = residue)) +
+    geom_point(aes(y=0)) +
+    facet_wrap(~chain,ncol = 1) +
+    labs(title=paste0(pdb_entry)) +
+    theme_minimal()
+  
+  
+  print(plot)
+}
+```
+
+## read in the results
+```{r}
+graphbepi_txt_files <- list.files(path = "output/GraphBepi/individual_files/", pattern = "\\.txt$")
+
+graphbepi_txt_files
+```
+
+```{r}
+data_GraphBepi <- NULL
+
+for (txt_file in graphbepi_txt_files) {
+  print(txt_file)
+  PDB <- sub("_.*", "", txt_file)
+  chain <- sub("^[^_]+_([A-Za-z0-9])_.*", "\\1", txt_file)
+
+  temp_data <- read.table(paste0("output/GraphBepi/individual_files/",txt_file), header = TRUE, skip=1)
+  
+  temp_data <- temp_data %>% 
+    mutate(
+      PDB = PDB,
+      chain = chain,
+      resid = aa123(AA),
+      `GraphBepi probability` = Prob,
+      `GraphBepi prediction` = Pred,
+     Position = row_number()
+    ) %>%
+    select(PDB, chain, resid, Position, `GraphBepi probability`, `GraphBepi prediction`)
+  
+  if (is.null(data_GraphBepi)) {
+    data_GraphBepi <- temp_data
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_GraphBepi <- rbind(data_GraphBepi, temp_data)
+  }
+}
+
+data_GraphBepi
+```
+
+```{r}
+data_GraphBepi_with_resno <- NULL
+
+for (pdb_entry in unique(data_GraphBepi$PDB)) {
+  print(pdb_entry)
+  
+  pdb_file <- paste0(pdbs_path,pdb_entry,".pdb") 
+  
+  if (file.exists(pdb_file)) {
+    print(pdb_file)
+    pdb_object <- read.pdb(file = pdb_file, rm.alt = FALSE)
+  } else {
+    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+  }
+  
+  graphbepi_subset <- data_GraphBepi %>% filter(PDB == pdb_entry)
+  graphbepi_sequence <- graphbepi_subset %>% pull(resid) %>% aa321() %>% str_c(collapse = "")
+  graphbepi_chain <- graphbepi_subset %>% pull(chain) %>% unique()
+  
+  required_adjustment <- map.seqposno.to.resno(sequence_AA1 = graphbepi_sequence, pdb_object)
+  print(required_adjustment)
+  
+  resmap <- create.resmap(pdb_object$atom %>% filter(chain == graphbepi_chain), 
+                                           graphbepi_subset,
+                                           required_adjustment, join_by = c("resno","chain","resid")
+                                   )
+  
+  if (is.null(data_GraphBepi_with_resno)) {
+    data_GraphBepi_with_resno <- resmap
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_GraphBepi_with_resno <- rbind(data_GraphBepi_with_resno, resmap)
+  }
+}
+
+data_GraphBepi_with_resno
+```

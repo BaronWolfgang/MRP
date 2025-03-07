@@ -1,0 +1,311 @@
+#Packages
+```{r}
+source("requirements/packages.R")
+```
+
+#Functions
+```{r}
+function_files <- list.files(path = "requirements/functions", pattern = "\\.R$",full.names = TRUE)
+
+for (function_file in function_files) {
+  source(function_file)
+}
+```
+
+# Variability
+## fas
+```{r}
+fasfiles_path <- "data/bioedit/fas/"
+fasfiles <- list.files(path = fasfiles_path, pattern = "\\.aln.fas", full.names = TRUE)
+#fasfiles
+
+aln_protein_names <- sapply(basename(fasfiles), function(x) {
+  if (grepl("^\\d+ SP_\\d{4}", x)) {
+    # Extract "SP_xxxx" pattern
+    sub(".*(SP_\\d{4}).*", "\\1", x)
+  } else {
+    # Extract first word before underscore
+    sub("^\\d+ ([^_]+).*", "\\1", x)
+  }
+})
+
+aln_protein_names
+```
+
+###redoing MSA 
+Takes a lot of time
+```{}
+data_variability <- NULL
+
+for (fasfile in fasfiles) {
+  print(basename(fasfile))
+  
+  protein_name <- sapply(basename(fasfile), function(x) {
+    if (grepl("^\\d+ SP_\\d{4}", x)) {
+      # Extract "SP_xxxx" pattern
+      sub(".*(SP_\\d{4}).*", "\\1", x)
+    } else {
+      # Extract first word before underscore
+      sub("^\\d+ ([^_]+).*", "\\1", x)
+    }
+  })
+  
+  tryCatch({
+    # Attempt to read the file
+    sequences <- readAAStringSet(fasfile)
+    print(sequences)
+    
+    # Perform the alignment
+    alignment <- msa(sequences)
+    consensus_seq <- unlist(strsplit(msaConsensusSequence(alignment), ""))
+    print(consensus_seq)
+    
+    alignment_matrix <- as.matrix(alignment)
+    
+    variability <- apply(alignment_matrix, 2, function(col) {
+      length(unique(col))
+    })
+    
+    variability_counts <- sapply(seq_len(ncol(alignment_matrix)), function(i) {
+      sum(alignment_matrix[, i] != consensus_seq[i] & alignment_matrix[, i] != "-")
+    })
+    
+    total_sequences <- nrow(alignment)
+    variability_frequencies <- variability_counts / total_sequences
+    
+    data_variability_subset <- data.frame(
+      protein = protein_name,
+      position = 1:total_sequences,
+      consensus_res = consensus_seq,
+      var_counts = variability_counts,
+      Var_freq = variability_frequencies,
+      n_seq = total_sequences
+    )
+    
+    data_variability <- rbind(data_variability, data_variability_subset)
+    
+  }, error = function(e) {
+    warning(paste("Skipping file due to error:", fasfile, "\nError message:", e$message))
+  })
+}
+
+data_variability
+```
+
+
+###skipping MSA
+Please note that the input DNA sequences are already properly aligned and without ambiguous residues, i.e. just "ATCG". The chunk below shouldn't be used if the DNA sequences aren't aligned yet: in that case first translating and then running the MSA would be appropriate.
+In our case, however, as the DNA sequences are already algned. We can keep the alignment by converting the gaps "-" to ambiguous nucleotides N, which translate to ambigous residue X and then transforming these back to gaps "-".
+
+```{r}
+data_variability <- NULL
+
+for (fasfile in fasfiles) {
+  print(basename(fasfile))
+  
+  protein_name <- sapply(basename(fasfile), function(x) {
+    if (grepl("^\\d+ SP_\\d{4}", x)) {
+      # Extract "SP_xxxx" pattern
+      sub(".*(SP_\\d{4}).*", "\\1", x)
+    } else {
+      # Extract first word before underscore
+      sub("^\\d+ ([^_]+).*", "\\1", x)
+    }
+  })
+  
+  tryCatch({
+    # Attempt to read the file
+    DNA_sequences <- readDNAStringSet(fasfile)
+    #print(DNA_sequences)
+    
+    
+    masked_DNA_sequences <- chartr("-", "N", DNA_sequences)
+    #print(masked_DNA_sequences)
+    
+    masked_sequences <- translate(masked_DNA_sequences, no.init.codon = TRUE, if.fuzzy.codon = "X")
+    #print(masked_sequences)
+    
+    sequences <- chartr("X", "-", masked_sequences)
+    
+    # Convert sequences to a character matrix
+    alignment_matrix <- as.matrix(sequences)
+    #print(alignment_matrix)
+    
+    # Determine consensus sequence manually
+    consensus_seq <- apply(alignment_matrix, 2, function(col) {
+      residues <- col[col != "-"]
+      unique_residues <- unique(col[col != "-"])  # Ignore gaps
+      most_frequent <- names(sort(table(residues), decreasing = TRUE))[1]
+      if (is.na(most_frequent)) "-" else most_frequent
+    })
+    
+    variability <- apply(alignment_matrix, 2, function(col) {
+      length(unique(col[col != "-"]))
+    })
+    
+    variability_counts <- sapply(seq_len(ncol(alignment_matrix)), function(i) {
+      sum(alignment_matrix[, i] != consensus_seq[i] & alignment_matrix[, i] != "-")
+    })
+    
+    total_sequences <- length(sequences)
+    sequence_length <- length(consensus_seq)
+    variability_frequencies <- variability_counts / total_sequences
+    
+    #print(paste("Length of protein_name:", length(protein_name)))
+    #print(paste("Length of consensus_seq:", length(consensus_seq)))
+    #print(paste("Length of variability_counts:", length(variability_counts)))
+    #print(paste("Length of variability_frequencies:", length(variability_frequencies)))
+    #print(paste("Total number of sequences:", total_sequences))
+    
+    data_variability_subset <- data.frame(
+      protein = rep(protein_name,sequence_length),
+      position = 1:sequence_length,
+      consensus_res = consensus_seq,
+      var_counts = variability_counts,
+      var_freq = variability_frequencies,
+      n_seq = total_sequences,
+      seq_length = sequence_length
+    )
+    
+    data_variability <- rbind(data_variability, data_variability_subset)
+    
+  }, error = function(e) {
+    warning(paste("Skipping file due to error:", fasfile, "\nError message:", e$message))
+  })
+}
+
+data_variability
+```
+
+#missing proteins
+```{r}
+setdiff(aln_protein_names, unique(data_variability$protein))
+```
+
+
+```{r}
+write.csv(data_variability,
+          "output/data_variability.csv", 
+          row.names=FALSE)
+```
+
+# plot
+```{r}
+for (proteinindex in unique(data_variability$protein)) {
+  data_subset <- data_variability %>% filter(protein == proteinindex)
+  
+  plot <- data_subset %>%
+    ggplot(aes(x=position, y=var_counts, fill=var_freq)) +
+    geom_col() +
+    #scale_x_continuous(limits = c(1, 20), breaks = 1:20) +
+    labs(title = paste0(proteinindex,"\nnumber of seqs: ",unique(data_subset$n_seq))) 
+    
+    print(plot)
+}
+
+```
+
+```{r}
+data_variability <- NULL
+
+for (fasfile in fasfiles) {
+  print(basename(fasfile))
+  
+  protein_name <- sapply(basename(fasfile), function(x) {
+    if (grepl("^\\d+ SP_\\d{4}", x)) {
+      # Extract "SP_xxxx" pattern
+      sub(".*(SP_\\d{4}).*", "\\1", x)
+    } else {
+      # Extract first word before underscore
+      sub("^\\d+ ([^_]+).*", "\\1", x)
+    }
+  })
+  
+  tryCatch({
+    # Attempt to read the file
+    DNA_sequences <- readDNAStringSet(fasfile)
+    #print(DNA_sequences)
+    
+    
+    masked_DNA_sequences <- chartr("-", "N", DNA_sequences)
+    #print(masked_DNA_sequences)
+    
+    masked_sequences <- translate(masked_DNA_sequences, no.init.codon = TRUE, if.fuzzy.codon = "X")
+    #print(masked_sequences)
+    
+    sequences <- chartr("X", "-", masked_sequences)
+    
+    # Convert sequences to a character matrix
+    alignment_matrix <- as.matrix(sequences)
+    #print(alignment_matrix)
+    
+    # Determine consensus sequence manually
+    consensus_seq <- apply(alignment_matrix, 2, function(col) {
+      residues <- col[col != "-"]
+      unique_residues <- unique(col[col != "-"])  # Ignore gaps
+      most_frequent <- names(sort(table(residues), decreasing = TRUE))[1]
+      if (is.na(most_frequent)) "-" else most_frequent
+    })
+    
+    variability <- apply(alignment_matrix, 2, function(col) {
+      length(unique(col[col != "-"]))
+    })
+    
+    variability_counts <- sapply(seq_len(ncol(alignment_matrix)), function(i) {
+      sum(alignment_matrix[, i] != consensus_seq[i] & alignment_matrix[, i] != "-")
+    })
+    
+    total_sequences <- length(sequences)
+    sequence_length <- length(consensus_seq)
+    variability_frequencies <- variability_counts / total_sequences
+    
+    #print(paste("Length of protein_name:", length(protein_name)))
+    #print(paste("Length of consensus_seq:", length(consensus_seq)))
+    #print(paste("Length of variability_counts:", length(variability_counts)))
+    #print(paste("Length of variability_frequencies:", length(variability_frequencies)))
+    #print(paste("Total number of sequences:", total_sequences))
+    
+    data_variability_subset <- data.frame(
+      protein = rep(protein_name,sequence_length),
+      position = 1:sequence_length,
+      consensus_res = consensus_seq,
+      var_counts = variability_counts,
+      var_freq = variability_frequencies,
+      n_seq = total_sequences,
+      seq_length = sequence_length
+    )
+    
+    data_variability <- rbind(data_variability, data_variability_subset)
+    
+  }, error = function(e) {
+    warning(paste("Skipping file due to error:", fasfile, "\nError message:", e$message))
+  })
+}
+
+data_variability
+```
+
+```{r}
+
+for (proteinindex in unique(data_variability$protein)) {
+  data_subset <- data_variability %>% filter(protein == proteinindex)
+  
+  plot <- data_subset %>%
+    ggplot(aes(x=position, y=var_counts, fill=var_freq)) +
+    geom_col() +
+    scale_x_continuous(limits = c(1, 20), breaks = 1:20) +
+    labs(title = paste0(proteinindex,"\nnumber of seqs: ",unique(data_subset$n_seq))) 
+    
+    print(plot)
+}
+
+seq_vector <- apply(alignment_matrix, 1, paste, collapse ="")
+
+names(seq_vector) <- paste0("Seq_", seq_along(seq_vector))
+
+seq_vector <- substr(seq_vector, 1, 10)
+
+ggseqlogo(seq_vector, method = "bits", ) + 
+  theme_minimal()
+```
+
