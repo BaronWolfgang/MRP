@@ -75,11 +75,11 @@ data_predictions_structurebased
 data_predictions_structurebased %>%
   filter(if_any(everything(), is.na))
 
-data_predictions_structurebased <- data_predictions_structurebased %>%
-  na.omit()
+data_predictions_structurebased <- data_predictions_structurebased #%>%
+  #na.omit()
   
-data_predictions_structurebased %>%
-  filter(if_any(everything(), is.na))
+#data_predictions_structurebased %>%
+#  filter(if_any(everything(), is.na))
 ```
 
 
@@ -93,8 +93,8 @@ data_predictions <- full_join(
 data_predictions %>%
   filter(if_any(everything(), is.na))
 
-data_predictions <- data_predictions %>%
-  na.omit() 
+#data_predictions <- data_predictions %>%
+#  na.omit() 
 
 data_predictions
 ```
@@ -168,7 +168,7 @@ track_list <- c(
   "Epigraph_score"
 )
 
-for (pdb_entry in unique(data_predictions_normalized$PDB)) {
+for (pdb_entry in unique(data_predictions$PDB)) {
   data_predictions_subset <- data_predictions %>%
     filter(PDB == pdb_entry) 
   
@@ -229,7 +229,7 @@ for (pdb_entry in unique(data_predictions_normalized$PDB)) {
 ###heatmap
 ```{r, fig.width = 14}
 for (pdb_entry in unique(data_predictions_normalized$PDB)) {
-  data_predictions_normalised_subset <- data_predictions_normalized %>%
+  data_predictions_normalised_subset <- data_predictions_normalized %>% na.omit() %>%
     filter(PDB == pdb_entry) 
   
   proteinname <- unique(data_predictions_normalised_subset$proteinname)
@@ -495,39 +495,8 @@ ggplot(pca_scores, aes(x = PC1, y = PC2, label = score_type)) +
 
 
 
-# (WIP) matching AmiA consensus to to epitope predictions
-## AmiA
-AmiA corresponds to pdb entries 8A42, 8QM0
-```{r}
-data.frame(Consensus_Residue = unlist(strsplit(msaConsensusSequence(AmiA_alignment), "")),
-           Position = seq_along(unlist(strsplit(msaConsensusSequence(AmiA_alignment), ""))))
-```
-
-
-```{r}
-pdb_object <- read.pdb("8A42")
-
-required_adjustment <- map.seqposno.to.resno(sequence_AA1 = msaConsensusSequence(AmiA_alignment), pdb_object = pdb_object, verbose = TRUE)
-required_adjustment
-```
-
-```{r}
-pdb_object$atom %>%
-  filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
-  ggplot(aes(x=resno, y=chain, col = resid)) +
-  geom_vline(xintercept=34) +
-  geom_vline(xintercept=50) +
-  geom_vline(xintercept=100) +
-  geom_point() +
-  geom_point(data = data_variability_AmiA ,
-             aes(x=Position, col=aa123(Consensus_residue), y="FASTA")
-             ) +
-  scale_x_continuous(limits = c(NA,50)) +
-  #scale_y_discrete(expand = c(0,0)) +
-  theme_bw() 
-```
-
-
+# Variability
+matching variability consensus sequence to epitope predictions sequences
 ## mutations_data_with_resno
 ```{r}
 data_variability <- read.csv("output/data_variability.csv")
@@ -583,17 +552,39 @@ for (pdb_entry in unique(data_predictions$PDB)) {
 
 data_variability_with_resno 
 data_variability_with_resno %>%
-  select(PDB,resno,resid, consensus_res,var_counts,var_freq,n_seq,seq_length)
+  select(PDB,chain,resno,resid, consensus_res,var_counts,var_freq,n_seq,seq_length) %>%
+  filter(!is.na(chain), !is.na(PDB),
+    if_any(everything(), is.na))
 ```
 
+```{, test}
+for (pdb_entry in unique(data_predictions$PDB)[2]) {
+  print(pdb_entry)
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  data_variability_subset <- data_variability %>% filter(PDB == pdb_entry, consensus_res != "*") %>% 
+    mutate(Position = position) %>% select(!position)
+  
+  consensus_sequence <- data_variability_subset %>%
+    pull(consensus_res) %>% 
+    str_c(collapse = "")
+  
+  required_adjustment <- map.seqposno.to.resno(sequence_AA1 = consensus_sequence, 
+                                               pdb_object = pdb_object,
+                                               verbose = TRUE)
+}
+```
+
+
 ```{r}
-data_predictions_with_variability <- inner_join(data_predictions_longestchain,
+data_predictions_with_variability <- full_join(data_predictions,
                                                 data_variability_with_resno %>% 
                                                   select(PDB, chain, resno, resid,  consensus_res, var_counts,
                                                          var_freq, n_seq,seq_length),
                                                 by = c("PDB", "chain","resno","resid"))
 
-data_predictions_with_variability
+data_predictions_with_variability %>%
+  filter(if_any(everything(), is.na))
 ```
 
 
@@ -611,19 +602,31 @@ pivot_list <- c(
   "var_freq"
 )
 
-for (pdb_entry in unique(data_predictions_with_variability$PDB)) {
-  data_subset <- data_predictions_with_variability %>% filter(PDB == pdb_entry) %>%
-    select(proteinname,PDB,chain,resno,pivot_list) %>%
-  pivot_longer(cols = pivot_list, 
-  names_to = "Score_Type", values_to = "Score_Value") %>%
-    group_by(Score_Type) %>%
-    mutate(normalized_score = case_when(
+for (pdb_entry in na.omit(unique(data_predictions_with_variability$PDB))) {
+  data_subset <- data_predictions_with_variability %>%    
+    filter(PDB == pdb_entry)  
+  
+    longest_chain <- data_subset %>% 
+      filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+    filter(chain_length == max(chain_length)) %>%  
+    filter(chain == min(chain)) %>% 
+    pull(chain) %>%
+    unique()
+    
+    data_subset_long <- data_subset %>% 
+      pivot_longer(cols = pivot_list, 
+                   names_to = "Score_Type", values_to = "Score_Value") %>%
+      group_by(Score_Type) %>%
+      mutate(normalized_score = case_when(
         Score_Type == "BepiPred-2.0 probability" ~ Score_Value,
         TRUE ~ rescale(Score_Value, to = c(0, 1))
-        )
-    )
+      )
+      )
+ 
   
-  plot <- data_subset %>%
+  plot <- data_subset_long %>% filter(chain == longest_chain | is.na(chain)) %>%
     ggplot(aes(x=resno, y=Score_Value, fill = normalized_score)) +
     geom_col() +
     
@@ -654,15 +657,14 @@ for (pdb_entry in unique(data_predictions_with_variability$PDB)) {
     )
   
   print(plot)
+  
+  ggsave(filename = paste0("output/figures/variability/", pdb_entry, "_", data_subset$chain[1],
+                           "_track.png"),
+         plot = plot, 
+         width = 14, height = 10, dpi = 300,
+         bg="white")
 }
 ```
-
-```{r}
-data_predictions_with_variability %>% filter(PDB =="2L4O") 
-data_predictions_longestchain %>% filter(PDB =="2L4O") 
-data_variability_with_resno %>% filter(PDB =="2L4O") 
-```
-
 
 ```{r}
 data_predictions_with_variability_normalized <- data_predictions_with_variability %>%
@@ -713,26 +715,10 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
 ```
 
 
-
-
-
-
 ```{r}
 data_variability %>% filter(PDB == "2L4O") %>%
   select(PDB, protein, position, consensus_res) 
 ```
-
-
-```{r}
-pdb_object$atom %>% 
-  select(chain,resno,resid) %>% unique()
-```
-
-
-```{r}
-resmap
-```
-
 
 
 

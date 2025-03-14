@@ -131,18 +131,34 @@ for(pdb_entry in pdb_downloads) {
     next
   }
   
-  fasta_sequence <- pdb_object$seqres %>%
-    enframe(name = "chain", value = "resid") %>%
-    add_count(chain, name = "chain_length") %>%
-    group_by(chain) %>%
-    mutate(resid = aa321(resid),
-           position = row_number()) %>%
-    filter(resid %in% names(AMINO_ACID_CODE)[1:20]) %>%
-    arrange(desc(chain_length), chain) %>%
-    filter(chain_length == max(chain_length)) %>% 
-    filter(chain == min(chain)) %>% #in case of tie, choose lowest alphabetically
-    pull(resid) %>%
-    str_c(collapse = "")
+  if (exists("seqres", where = pdb_object)) {
+    # If seqres exists, use the fasta sequence extraction process
+    fasta_sequence <- pdb_object$seqres %>%
+      enframe(name = "chain", value = "resid") %>%
+      add_count(chain, name = "chain_length") %>%
+      group_by(chain) %>%
+      mutate(resid = aa321(resid),
+             position = row_number()) %>%
+      filter(resid %in% names(AMINO_ACID_CODE)[1:20]) %>%
+      arrange(desc(chain_length), chain) %>%
+      filter(chain_length == max(chain_length)) %>%
+      filter(chain == min(chain)) %>%  # In case of tie, choose lowest alphabetically
+      pull(resid) %>%
+      str_c(collapse = "")
+  } else {
+    print("no seqres in pdb, will take sequence from atom")
+    # If seqres does not exist, use atom data
+    fasta_sequence <- pdb_object$atom %>%
+      filter(type == "ATOM",
+             elety == "CA",
+             resid %in% toupper(AMINO_ACID_CODE)[1:20]) %>%
+      add_count(chain, name = "chain_length") %>%
+      arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+      filter(chain_length == max(chain_length)) %>%
+      filter(chain == min(chain)) %>%
+      pull(resid) %>%
+      str_c(collapse = "")
+  }
   
   fasta_content <- paste0(">", pdb_entry, "\n", fasta_sequence)
   

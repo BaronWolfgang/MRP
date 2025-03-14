@@ -97,6 +97,12 @@ write.csv(data_BepiPred_2_with_resno,
 
 # BepiPred-3.0 results
 https://services.healthtech.dtu.dk/services/BepiPred-3.0/
+
+```{r}
+read_csv
+```
+
+
 ```{r}
 data_BepiPred_3 <- rbind(
     read_csv("output/BepiPred3.0/raw_output_part1_0228.csv"),
@@ -144,11 +150,13 @@ write.csv(data_BepiPred_3_with_resno,
 # DiscoTope-3.0
 https://services.healthtech.dtu.dk/services/DiscoTope-3.0/
 ```{r}
-csv_files <- list.files("output/DiscoTope", pattern = "*.csv", full.names = TRUE)
+csv_files <- list.files("output/DiscoTope/individual_files/", pattern = "*.csv", full.names = TRUE)
 
 data_DiscoTope <- NULL
 
 for (csv_file in csv_files) {
+  print(csv_file)
+  
   temp_data <- read_csv(csv_file, show_col_types = FALSE) 
   
   if (is.null(data_DiscoTope)) {
