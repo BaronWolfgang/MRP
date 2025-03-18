@@ -77,6 +77,17 @@ data_structural <- read_xlsx("data/Pneumoproteins_PDB_structuralData.xlsx") %>%
 data_structural  
 ```
 
+### long format 
+```{r}
+data_structural_long <- data_structural %>%
+  separate_rows(`PDB entry`, sep = ", ") %>%
+  mutate(PDB = `PDB entry`) %>%
+  select(-`PDB entry`)
+
+write.csv(data_structural_long,
+          "data/Pneumoproteins_PDB_structuralData_long.csv", 
+          row.names=FALSE)
+```
 
 ## download all pdb's
 ```{r}
