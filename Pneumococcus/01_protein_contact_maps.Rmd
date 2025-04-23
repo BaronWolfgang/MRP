@@ -1,0 +1,662 @@
+---
+title: "Streptococcus pneumoniae epitope prediction tools"
+author: "Jan Paul van Meenen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+#Packages
+```{r}
+source("requirements/packages.R")
+```
+
+#Functions
+```{r}
+function_files <- list.files(path = "requirements/functions", pattern = "\\.R$",full.names = TRUE)
+
+for (function_file in function_files) {
+  source(function_file)
+}
+```
+
+### get valid all pdb entires and files 
+```{r}
+pdbs_path = "data/pdb/"
+
+pdb_files_list <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
+
+pdb_files_list
+```
+#FIXME: maybe move all repeated paths to a single file that is shared, similar to functions
+
+#Bio3d 
+##pheatmap
+Using EpiGraph same epitope definitions
+
+Definition of neighbours matter: https://pmc.ncbi.nlm.nih.gov/articles/PMC6622159/
+
+### base
+```{r}
+maxdist <- 10
+
+for (pdb_entry in pdb_files_list[3]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom$chain)
+  
+  for (chain_id in chains) {
+    cat("  Processing chain:", chain_id, "\n")
+    
+    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+    coords <- pdb_object$xyz[ca.inds$xyz]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    resnos <- pdb_object$atom %>% filter(chain == chain_id, elety == "CA", type == "ATOM") %>% pull(resno)
+    
+    # Assign names to distance matrix
+    rownames(dist.mat) <- resnos
+    colnames(dist.mat) <- resnos
+    
+    dist.mat <- dist.mat[rev(rownames(dist.mat)), ]
+    
+    colorbar_df <- get_residueindex_colors(resnos, rev = FALSE)
+    
+    annotation_df <- data.frame(NGL_Color = as.character(resnos))
+    rownames(annotation_df) <- as.character(resnos)
+    
+    annotation_colors <- list(
+      NGL_Color = setNames(colorbar_df$color, as.character(resnos))
+    )
+    
+    bottom_annot <- HeatmapAnnotation(
+      `Residue Index` = annotation_df$NGL_Color,
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      annotation_name_side = "right",
+      show_legend = FALSE,
+      which = "column"
+    )
+    
+    right_annot <- rowAnnotation(
+      `Residue Index` = rownames(dist.mat),
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      show_annotation_name = FALSE,
+      show_legend = FALSE
+    )
+    
+    # Plot heatmap
+    ht <- Heatmap(
+      dist.mat,
+      name = "Distance (Å)",
+      col = colorRamp2(seq(0, maxdist, length.out=100), rev(viridisLite::viridis(100))),
+      na_col = "white",
+      cluster_rows = FALSE,
+      cluster_columns = FALSE,
+      show_row_names = FALSE,
+      show_column_names = FALSE,
+      row_title = NULL,
+      column_title = paste0("Protein contact map (Ca): ", pdb_entry, " (Chain ", chain_id, ")"),
+      bottom_annotation = bottom_annot,
+      right_annotation = right_annot
+    )
+    
+    draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+  }
+}
+```
+
+### no upper
+```{r}
+maxdist <- 10
+
+for (pdb_entry in pdb_files_list[3]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom$chain)
+  
+  for (chain_id in chains) {
+    cat("  Processing chain:", chain_id, "\n")
+    
+    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+    coords <- pdb_object$xyz[ca.inds$xyz]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    resnos <- pdb_object$atom %>% filter(chain == chain_id, elety == "CA", type == "ATOM") %>% pull(resno)
+    
+    # Assign names to distance matrix
+    rownames(dist.mat) <- resnos
+    colnames(dist.mat) <- resnos
+    
+    dist.mat[lower.tri(dist.mat, diag = TRUE)] <- NA
+    
+    dist.mat <- dist.mat[rev(rownames(dist.mat)), ]
+    
+    colorbar_df <- get_residueindex_colors(resnos, rev = FALSE)
+    
+    annotation_df <- data.frame(NGL_Color = as.character(resnos))
+    rownames(annotation_df) <- as.character(resnos)
+    
+    annotation_colors <- list(
+      NGL_Color = setNames(colorbar_df$color, as.character(resnos))
+    )
+    
+    bottom_annot <- HeatmapAnnotation(
+      `Residue Index` = annotation_df$NGL_Color,
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      annotation_name_side = "right",
+      show_legend = FALSE,
+      which = "column"
+    )
+    
+    right_annot <- rowAnnotation(
+      `Residue Index` = rownames(dist.mat),
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      show_annotation_name = FALSE,
+      show_legend = FALSE
+    )
+    
+    # Plot heatmap
+    ht <- Heatmap(
+      dist.mat,
+      name = "Distance (Å)",
+      col = colorRamp2(seq(0, maxdist, length.out=100), rev(viridisLite::viridis(100))),
+      na_col = "white",
+      cluster_rows = FALSE,
+      cluster_columns = FALSE,
+      show_row_names = FALSE,
+      show_column_names = FALSE,
+      row_title = NULL,
+      column_title = paste0("Protein contact map (Ca): ", pdb_entry, " (Chain ", chain_id, ")"),
+      bottom_annotation = bottom_annot,
+      right_annotation = right_annot
+    )
+    
+    draw(ht, heatmap_legend_side = "right")
+  }
+}
+```
+
+### diagonals removed
+```{r, fig.witdh=14}
+maxdist <- 10
+n_dianeighbours <- 8
+
+for (pdb_entry in pdb_files_list[2]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom$chain)
+  
+  for (chain_id in chains) {
+    cat("  Processing chain:", chain_id, "\n")
+    
+    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+    coords <- pdb_object$xyz[ca.inds$xyz]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    resnos <- pdb_object$atom %>% filter(chain == chain_id, elety == "CA", type == "ATOM") %>% pull(resno)
+    
+    # Assign names to distance matrix
+    rownames(dist.mat) <- resnos
+    colnames(dist.mat) <- resnos
+    
+    dist.mat[lower.tri(dist.mat, diag = TRUE)] <- NA
+    
+    #remove diagonal
+    diag(dist.mat) <- NA
+    # Set the two diagonal neighbors
+    n <- nrow(dist.mat)
+    for (k in 1:n_dianeighbours) {
+      dist.mat[cbind(1:(n-k), (k+1):n)] <- NA  # Upper diagonal neighbors (i, i+k)
+      dist.mat[cbind((k+1):n, 1:(n-k))] <- NA  # Lower diagonal neighbors (i+k, i)
+    }
+    
+    dist.mat <- dist.mat[rev(rownames(dist.mat)), ]
+    
+    colorbar_df <- get_residueindex_colors(resnos, rev = FALSE)
+    
+    annotation_df <- data.frame(NGL_Color = as.character(resnos))
+    rownames(annotation_df) <- as.character(resnos)
+    
+    annotation_colors <- list(
+      NGL_Color = setNames(colorbar_df$color, as.character(resnos))
+    )
+    
+    bottom_annot <- HeatmapAnnotation(
+      `Residue Index` = annotation_df$NGL_Color,
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      annotation_name_side = "right",
+      show_legend = FALSE,
+      which = "column"
+    )
+    
+    right_annot <- rowAnnotation(
+      `Residue Index` = rownames(dist.mat),
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      show_annotation_name = FALSE,
+      show_legend = FALSE
+    )
+    
+    # Plot heatmap
+    ht <- Heatmap(
+      dist.mat,
+      name = "Distance (Å)",
+      col = colorRamp2(seq(0, maxdist, length.out=100), rev(viridisLite::viridis(100))),
+      na_col = "white",
+      cluster_rows = FALSE,
+      cluster_columns = FALSE,
+      show_row_names = FALSE,
+      show_column_names = FALSE,
+      row_title = NULL,
+      column_title = paste0("Protein contact map (Ca): ", pdb_entry, " (Chain ", chain_id, ")"),
+      bottom_annotation = bottom_annot,
+      right_annotation = right_annot
+    )
+    
+    draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+  }
+}
+```
+
+### igraph
+```{r}
+install.packages("igraph")
+library("igraph")
+```
+
+```{r, fig.width=14}
+for (pdb_entry in pdb_files_list[2]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom$chain)
+  
+  for (chain_id in chains) {
+    cat("  Processing chain:", chain_id, "\n")
+    
+    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+    coords <- pdb_object$xyz[ca.inds$xyz]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    resnos <- pdb_object$atom %>%
+      filter(chain == chain_id, elety == "CA", type == "ATOM") %>%
+      pull(resno) %>%
+      as.character()
+
+    rownames(dist.mat) <- resnos
+    colnames(dist.mat) <- resnos
+    
+    # Create a contact map (binary)
+    contact.map <- dist.mat < 10  # Threshold distance to 10 Å
+    diag(contact.map) <- FALSE
+    
+    # Create a graph from the contact map (edges are formed where contact exists)
+    edge_list <- which(contact.map, arr.ind = TRUE)
+    edge_list_named <- cbind(
+      from = rownames(contact.map)[edge_list[,1]],
+      to = colnames(contact.map)[edge_list[,2]]
+    )
+    # Create an igraph object from the edge list
+    g <- graph_from_edgelist(as.matrix(edge_list_named), directed = FALSE)
+    
+    # Optionally add weights based on distance
+    E(g)$weight <- dist.mat[edge_list]  # Distance between connected atoms
+    
+    color_df <- get_residueindex_colors_v2(as.numeric(resnos))
+    vertex_colors <- setNames(color_df$color, as.character(color_df$resno))
+
+    V(g)$color <- vertex_colors[as.character(V(g)$name)]
+    
+    # Plot the graph
+    plot(g, 
+         main = paste0("Protein Contact Map: ", pdb_entry, " (Chain ", chain_id, ")"),
+         vertex.size = 10, 
+         #vertex.label = NA,
+         edge.width = E(g)$weight / 2,  # Scale edge width by distance
+         edge.color = alpha("gray", .2),#rgb(128/256,128/256,128/256,0.2),
+         layout = layout_with_fr,  # Fruchterman-Reingold layout
+         vertex.color = V(g)$color, 
+    )
+    
+  }
+}
+
+```
+
+#### with scores
+```{r, fig.width=14}
+for (pdb_entry in pdb_files_list[3]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom$chain)
+  
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == pdb_entry)
+  
+  protein_name <- unique(data_subset$proteinname)
+  
+  for (chain_index in chains) {
+    cat("  Processing chain:", chain_index, "\n")
+    
+    ca.inds <- atom.select(pdb_object, chain = chain_index, elety = "CA", type = "ATOM")
+    coords <- pdb_object$xyz[ca.inds$xyz]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    resnos <- pdb_object$atom %>%
+      filter(chain == chain_index, elety == "CA", type == "ATOM") %>%
+      pull(resno) %>%
+      as.character()
+
+    rownames(dist.mat) <- resnos
+    colnames(dist.mat) <- resnos
+    
+    # Create a contact map (binary)
+    contact.map <- dist.mat < 10  # Threshold distance to 10 Å
+    diag(contact.map) <- FALSE
+    
+    # Create a graph from the contact map (edges are formed where contact exists)
+    edge_list <- which(contact.map, arr.ind = TRUE)
+    edge_list_named <- cbind(
+      from = rownames(contact.map)[edge_list[,1]],
+      to = colnames(contact.map)[edge_list[,2]]
+    )
+    # Create an igraph object from the edge list
+    g <- graph_from_edgelist(as.matrix(edge_list_named), directed = FALSE)
+    
+    # Optionally add weights based on distance
+    E(g)$weight <- dist.mat[edge_list]  # Distance between connected atoms
+    
+    color_df <- get_residueindex_colors_v2(as.numeric(resnos))
+    vertex_colors <- setNames(color_df$color, as.character(color_df$resno))
+
+    V(g)$color <- vertex_colors[as.character(V(g)$name)]
+    
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    data_subset_wide <- data_subset_chain %>%
+      select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+      distinct() %>%
+      column_to_rownames("resno") %>%
+      as.data.frame()
+    
+    prediction_scores <- data_subset_wide$`BepiPred-3.0 score`
+    names(prediction_scores) <- rownames(data_subset_wide)
+    
+    prediction_tools <- c("BepiPred-2.0 probability", "BepiPred-3.0 score", "DiscoTope-3.0_calibrated_score","Epigraph_score")
+    
+    layout <- layout_with_fr(g)
+    
+    # Loop over each prediction tool
+    for (tool in prediction_tools) {
+      prediction_scores <- data_subset_wide[[tool]]
+      names(prediction_scores) <- rownames(data_subset_wide)
+      
+      # Scale the scores to set an appropriate vertex size
+      V(g)$size <- prediction_scores[as.character(V(g)$name)] * 20  # Scale factor of 20 for visibility
+      
+      # Fallback for NA values, ensuring vertices with no score are still visible
+      V(g)$size[is.na(V(g)$size)] <- 2  
+      
+      # Plot the graph for the current tool
+      plot(g, 
+           main = paste0("Protein Contact Map: ", pdb_entry, " (Chain ", chain_index, ")\n", tool),
+           vertex.size = V(g)$size,
+           vertex.label = NA,
+           edge.width = E(g)$weight / 4,  
+           edge.color = "gray", 
+           layout = layout,  # Fruchterman-Reingold layout for better visualization
+           vertex.color = V(g)$color,
+      )
+    }
+  }
+}
+
+```
+
+
+```{r,fig.width=14}
+set.seed(335)
+
+for (pdb_entry in pdb_files_list[3]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom$chain)
+  
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == pdb_entry)
+  
+  protein_name <- unique(data_subset$proteinname)
+  
+  for (chain_index in chains) {
+    cat("  Processing chain:", chain_index, "\n")
+    
+    ca.inds <- atom.select(pdb_object, chain = chain_index, elety = "CA", type = "ATOM")
+    coords <- pdb_object$xyz[ca.inds$xyz]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    resnos <- pdb_object$atom %>%
+      filter(chain == chain_index, elety == "CA", type == "ATOM") %>%
+      pull(resno) %>%
+      as.character()
+
+    rownames(dist.mat) <- resnos
+    colnames(dist.mat) <- resnos
+    
+    # Create a contact map (binary)
+    contact.map <- dist.mat < 10  # Threshold distance to 10 Å
+    diag(contact.map) <- FALSE
+    
+    # Create a graph from the contact map (edges are formed where contact exists)
+    edge_list <- which(contact.map, arr.ind = TRUE)
+    edge_list_named <- cbind(
+      from = rownames(contact.map)[edge_list[,1]],
+      to = colnames(contact.map)[edge_list[,2]]
+    )
+    # Create an igraph object from the edge list
+    g <- graph_from_edgelist(as.matrix(edge_list_named), directed = FALSE)
+    
+    # Optionally add weights based on distance
+    E(g)$weight <- dist.mat[edge_list]  # Distance between connected atoms
+    
+    color_df <- get_residueindex_colors_v2(as.numeric(resnos))
+    vertex_colors <- setNames(color_df$color, as.character(color_df$resno))
+
+    V(g)$color <- vertex_colors[as.character(V(g)$name)]
+    
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    data_subset_wide <- data_subset_chain %>%
+      select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+      distinct() %>%
+      column_to_rownames("resno") %>%
+      as.data.frame()
+    
+    prediction_scores <- data_subset_wide$`BepiPred-3.0 score`
+    names(prediction_scores) <- rownames(data_subset_wide)
+    
+    prediction_tools <- c("BepiPred-2.0 probability", "BepiPred-3.0 score", "DiscoTope-3.0_calibrated_score","Epigraph_score")
+    
+    layout <- layout_with_fr(g)
+    
+    par(mfrow = c(2, 2), mar = c(1, 1, 5, 0)) 
+
+    for (tool in prediction_tools) {
+      prediction_scores <- data_subset_wide[[tool]]
+      names(prediction_scores) <- rownames(data_subset_wide)
+      
+      V(g)$size <- prediction_scores[as.character(V(g)$name)] * 20
+      V(g)$size[is.na(V(g)$size)] <- 2
+      
+      plot(g,
+           main = tool,
+           vertex.size = V(g)$size,
+           vertex.label = NA,
+           edge.width = E(g)$weight / 4,
+           edge.color = "gray",
+           layout = layout,
+           vertex.color = V(g)$color)
+    }
+    mtext(
+      paste0("Protein Contact Map: ", pdb_entry, " (Chain ", chain_index, ")"),
+      outer = TRUE, cex = 1.5, line = -2, font = 2
+    )
+    
+    par(mfrow = c(1, 1))  # reset to default after plotting
+  }
+}
+```
+
+#### topn
+```{r, fig.width=14}
+set.seed(335)
+
+for (pdb_entry in pdb_files_list[3]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom$chain)
+  
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == pdb_entry)
+  
+  protein_name <- unique(data_subset$proteinname)
+  
+  for (chain_index in chains) {
+    cat("  Processing chain:", chain_index, "\n")
+    
+    ca.inds <- atom.select(pdb_object, chain = chain_index, elety = "CA", type = "ATOM")
+    coords <- pdb_object$xyz[ca.inds$xyz]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    resnos <- pdb_object$atom %>%
+      filter(chain == chain_index, elety == "CA", type == "ATOM") %>%
+      pull(resno) %>%
+      as.character()
+
+    rownames(dist.mat) <- resnos
+    colnames(dist.mat) <- resnos
+    
+    # Create a contact map (binary)
+    contact.map <- dist.mat < 10  # Threshold distance to 10 Å
+    diag(contact.map) <- FALSE
+    
+    # Create a graph from the contact map (edges are formed where contact exists)
+    edge_list <- which(contact.map, arr.ind = TRUE)
+    edge_list_named <- cbind(
+      from = rownames(contact.map)[edge_list[,1]],
+      to = colnames(contact.map)[edge_list[,2]]
+    )
+    # Create an igraph object from the edge list
+    g <- graph_from_edgelist(as.matrix(edge_list_named), directed = FALSE)
+    
+    # Optionally add weights based on distance
+    E(g)$weight <- dist.mat[edge_list]  # Distance between connected atoms
+    
+    color_df <- get_residueindex_colors_v2(as.numeric(resnos))
+    vertex_colors <- setNames(color_df$color, as.character(color_df$resno))
+
+    V(g)$color <- vertex_colors[as.character(V(g)$name)]
+    
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    data_subset_wide <- data_subset_chain %>%
+      select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+      distinct() %>%
+      column_to_rownames("resno") %>%
+      as.data.frame()
+    
+    prediction_scores <- data_subset_wide$`BepiPred-3.0 score`
+    names(prediction_scores) <- rownames(data_subset_wide)
+    
+    prediction_tools <- c("BepiPred-2.0 probability", "BepiPred-3.0 score", "DiscoTope-3.0_calibrated_score","Epigraph_score")
+    
+    layout <- layout_with_fr(g)
+    
+    par(mfrow = c(2, 2), mar = c(1, 1, 5, 0)) 
+
+    for (tool in prediction_tools) {
+      prediction_scores <- data_subset_wide[[tool]]
+      names(prediction_scores) <- rownames(data_subset_wide)
+      
+      threshold <- quantile(prediction_scores, 0.85)
+      
+      V(g)$color <- ifelse(prediction_scores[as.character(V(g)$name)] > threshold, 
+                           vertex_colors[as.character(V(g)$name)], "white")
+      
+      V(g)$size <- prediction_scores[as.character(V(g)$name)] * 20
+      V(g)$size[is.na(V(g)$size)] <- 2
+      
+      plot(g,
+           main = tool,
+           vertex.size = V(g)$size,
+           vertex.label = NA,
+           edge.width = E(g)$weight / 4,
+           edge.color = "gray",
+           layout = layout,
+           vertex.color = V(g)$color)
+    }
+    mtext(
+      paste0("Protein Contact Map (top 15% epitopescore): ", pdb_entry, " (Chain ", chain_index, ")"),
+      outer = TRUE, cex = 1.5, line = -2, font = 2
+    )
+    
+    par(mfrow = c(1, 1))  # reset to default after plotting
+  }
+}
+```
+
+
+##plot.cmap
+```{r}
+for (pdb_entry in pdb_files_list[1:3]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom$chain)
+  
+  for (chain_id in chains) {
+    cat("  Processing chain:", chain_id, "\n")
+    
+    # Select C-alpha atoms only for the specific chain
+    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA")
+    coords <- pdb_object$xyz[ca.inds$xyz]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    # Cap the distance values at 10 (not modifying the matrix)
+    #dist.mat[dist.mat > 10] <- 10
+    
+    # Plot the contact map using cmap
+    figure <- plot.cmap(
+      cmap(
+        pdb_object$xyz[ca.inds$xyz],
+        dcut = 10,
+        scut = 8
+        ),
+      col = rev(viridisLite::viridis(100)),
+      main = paste0("Protein contact map: ", pdb_entry, " (Chain ", chain_id, ")")
+    )
+    
+    print(figure)
+  }
+}
+```
+

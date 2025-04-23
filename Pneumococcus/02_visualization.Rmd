@@ -156,7 +156,7 @@ data_predictions_normalized
 ```
 
 ###track
-```{r}
+```{r, warning=FALSE}
 track_list <- c(
   "BepiPred-2.0 probability", 
   # "RSA NetsurfP", 
@@ -226,7 +226,7 @@ for (pdb_entry in unique(data_predictions$PDB)) {
 ```
 
 
-###heatmap
+###heatmap (pheatmap)
 ```{r, fig.width = 14}
 for (pdb_entry in unique(data_predictions_normalized$PDB)) {
   data_predictions_normalised_subset <- data_predictions_normalized %>% na.omit() %>%
@@ -257,6 +257,110 @@ for (pdb_entry in unique(data_predictions_normalized$PDB)) {
            plot = figure, 
            width = 14, height = 10, dpi = 300,
            bg="white")
+  }
+}
+```
+
+```{r, fig.width=14}
+for (pdb_entry in unique(data_predictions_normalized$PDB)[2]) {
+  data_predictions_normalised_subset <- data_predictions_normalized %>% na.omit() %>%
+    filter(PDB == pdb_entry) 
+  
+  proteinname <- unique(data_predictions_normalised_subset$proteinname)
+  
+  for (chain_index in unique(data_predictions_normalised_subset$chain)) {
+    
+    data_predictions_normalised_subset_wide <- data_predictions_normalised_subset %>%
+      filter(chain == chain_index) %>%
+      select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score) %>%
+      distinct(resno, .keep_all = TRUE) %>%
+      column_to_rownames("resno") %>%
+      as.data.frame()
+    
+    residues <- as.numeric(rownames(data_predictions_normalised_subset_wide))
+    
+    colorbar_df <- get_residueindex_colors_v2(residues)
+    
+    annotation_col <- data.frame(NGL_Color = residues)
+    rownames(annotation_col) <- residues
+    
+    annotation_colors <- list(
+      NGL_Color = setNames(colorbar_df$color, colorbar_df$resno)
+    )
+    
+    figure <- pheatmap::pheatmap(t(data_predictions_normalised_subset_wide), 
+                       cluster_rows = TRUE,         
+                       cluster_cols = FALSE,         
+                       main = paste0(pdb_entry, " chain ", chain_index, " (",proteinname,")"), 
+                       color = colorRampPalette(c("blue", "gray95", "red"))(50),
+                       labels_col = "resno",
+                       clustering_distance_rows = "correlation",
+                       annotation_col = annotation_col,
+                       annotation_colors = annotation_colors,
+                       annotation_legend = FALSE, 
+                       annotation_names_col = FALSE
+    ) 
+    
+    print(figure)
+    
+    ggsave(filename = paste0("output/figures/heatmap/", pdb_entry, "_", chain_index, "_heatmap.png"), 
+           plot = figure, 
+           width = 14, height = 10, dpi = 300,
+           bg="white")
+  }
+}
+```
+
+### heatmap (complexheatmap)
+```{r}
+for (pdb_entry in unique(data_predictions_normalized$PDB)[1:5]) {
+  data_predictions_normalised_subset <- data_predictions_normalized %>% na.omit() %>%
+    filter(PDB == pdb_entry) 
+  
+  proteinname <- unique(data_predictions_normalised_subset$proteinname)
+  
+  for (chain_index in unique(data_predictions_normalised_subset$chain)) {
+    
+    data_predictions_normalised_subset_wide <- data_predictions_normalised_subset %>%
+      filter(chain == chain_index) %>%
+      select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score) %>%
+      distinct(resno, .keep_all = TRUE) %>%
+      column_to_rownames("resno") %>%
+      as.data.frame()
+    
+    residues <- as.numeric(rownames(data_predictions_normalised_subset_wide))
+    
+    colorbar_df <- get_residueindex_colors(residues, rev = FALSE)
+    
+    annotation_col <- data.frame(NGL_Color = factor(residues))
+    
+    annotation_colors <- list(
+      NGL_Color = setNames(colorbar_df$color, residues)
+    )
+    
+    figure <- ComplexHeatmap::pheatmap(
+      t(data_predictions_normalised_subset_wide), 
+      cluster_rows = TRUE,         
+      cluster_cols = FALSE,         
+      main = paste0(pdb_entry, " chain ", chain_index, " (", proteinname, ")"), 
+      color = colorRampPalette(c("blue", "gray95", "red"))(50),
+      #labels_col = rownames(data_predictions_normalised_subset_wide),
+      clustering_distance_rows = "correlation",
+      annotation_col = annotation_col,
+      annotation_colors = annotation_colors,
+      annotation_legend = FALSE, 
+      annotation_names_col = FALSE
+    )
+    
+    
+    print(figure)
+    
+    #ggsave(filename = paste0("output/figures/heatmap/", pdb_entry, "_", chain_index, "_heatmap.png"), 
+    #       plot = figure, 
+    #       width = 14, height = 10, dpi = 300,
+    #       bg="white")
   }
 }
 ```
@@ -520,13 +624,11 @@ setdiff(
 )
 ```
 
-
-
 ```{r}
 data_variability_with_resno <- NULL
 
-for (pdb_entry in unique(data_predictions$PDB)) {
-  print(pdb_entry)
+for (pdb_entry in na.omit(unique(data_predictions$PDB))) {
+  print(pdb_entry) 
   
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
@@ -589,7 +691,8 @@ data_predictions_with_variability %>%
 
 
 ## plot
-```{r, fig.width = 14}
+### tracks
+```{r,warning=FALSE, fig.width = 14}
 pivot_list <- c(
   "BepiPred-2.0 probability", 
   # "RSA NetsurfP", 
@@ -602,7 +705,7 @@ pivot_list <- c(
   "var_freq"
 )
 
-for (pdb_entry in na.omit(unique(data_predictions_with_variability$PDB))) {
+for (pdb_entry in na.omit(unique(data_predictions_with_variability$PDB))[1]) {
   data_subset <- data_predictions_with_variability %>%    
     filter(PDB == pdb_entry)  
   
@@ -681,44 +784,91 @@ data_predictions_with_variability_normalized <- data_predictions_with_variabilit
 data_predictions_with_variability_normalized
 ```
 
-```{r}
+### heatmap
+```{r, fig.width=14}
 for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
   data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
   
   protein_name <- unique(data_subset$proteinname)
+  
+  print(PDB_entry)
  
   for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
     data_subset_chain <- data_subset %>% filter(chain == chain_index)
     
     data_subset_wide <- data_subset_chain %>%
       select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
              `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+      distinct() %>%
       column_to_rownames("resno") %>%
       as.data.frame()
     
-    #not all sequences have variability 
-    if (var(data_subset_wide$var_freq, na.rm = TRUE) == 0) {
-      data_subset_wide <- data_subset_wide %>% select(-var_freq)
-    }
-
-    plot <- pheatmap(t(data_subset_wide), 
-         cluster_rows = TRUE,         
-         cluster_cols = FALSE,         
-         main = paste0(PDB_entry," chain ", chain_index, " (", protein_name, ")"), 
-         color = colorRampPalette(c("blue", "white", "red"))(50),
-         labels_col = "resno",
-         clustering_distance_rows = "correlation") 
+    bar_data <- data_subset_wide$var_freq
+    names(bar_data) <- rownames(data_subset_wide)
     
-    print(plot)
+    data_subset_wide <- data_subset_wide %>% select(-var_freq)
+    
+    heatmap_matrix <- t(data_subset_wide)
+    
+    top_annot <- HeatmapAnnotation(
+      `Variability` = anno_barplot(
+        bar_data, 
+        gp = gpar(fill = "gray30"), 
+        border = FALSE, 
+        bar_width = 1, 
+        ylim = c(0,1),
+        axis_param = list(
+          at = seq(0, 1, by = 0.2),
+          labels = seq(0, 1, by = 0.2)
+        )
+      ),
+      show_annotation_name = TRUE,
+      annotation_name_side = "left",
+      height = unit(4, "cm")
+    )
+    
+    residues <- as.numeric(colnames(heatmap_matrix))
+    
+    colorbar_df <- get_residueindex_colors(residues, rev = FALSE)
+    
+    annotation_df <- data.frame(NGL_Color = as.character(residues))
+    rownames(annotation_df) <- as.character(residues)
+    
+    annotation_colors <- list(
+      NGL_Color = setNames(colorbar_df$color, as.character(residues))
+    )
+    
+    bottom_annot <- HeatmapAnnotation(
+      `Residue Index` = annotation_df$NGL_Color,
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      annotation_name_side = "right",
+      show_legend = FALSE,
+      which = "column"
+    )
+
+    ht <- Heatmap(
+      heatmap_matrix,
+      name = "Score",
+      cluster_rows = TRUE,
+      cluster_columns = FALSE,
+      column_title = paste0(PDB_entry, " chain ", chain_index, " (", protein_name, ")"),
+      col = colorRampPalette(c("blue", "gray95", "red"))(50),
+      top_annotation = top_annot,
+      bottom_annotation = bottom_annot,
+      show_column_names = FALSE
+    )
+    
+    figure <- draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+    
+    print(figure)
+    
+    #ggsave(filename = paste0("output/figures/heatmap/variability/", pdb_entry, "_", chain_index, "_heatmap.png"), 
+    #       plot = figure, 
+    #       width = 14, height = 10, dpi = 300,
+    #       bg="white")
   }
 }
 ```
-
-
-```{r}
-data_variability %>% filter(PDB == "2L4O") %>%
-  select(PDB, protein, position, consensus_res) 
-```
-
 
 

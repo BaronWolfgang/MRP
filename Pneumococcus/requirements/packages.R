@@ -14,7 +14,7 @@ for (package in packages_to_install) {
   library(package, character.only = TRUE)
 }
 
-BiocManager_packages_to_install <- c("Biostrings","pwalign")
+BiocManager_packages_to_install <- c("Biostrings","pwalign","ComplexHeatmap")
 
 if (!require("BiocManager", quietly = TRUE))
   install.packages("BiocManager")

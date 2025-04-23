@@ -77,17 +77,7 @@ data_structural <- read_xlsx("data/Pneumoproteins_PDB_structuralData.xlsx") %>%
 data_structural  
 ```
 
-### long format 
-```{r}
-data_structural_long <- data_structural %>%
-  separate_rows(`PDB entry`, sep = ", ") %>%
-  mutate(PDB = `PDB entry`) %>%
-  select(-`PDB entry`)
 
-write.csv(data_structural_long,
-          "data/Pneumoproteins_PDB_structuralData_long.csv", 
-          row.names=FALSE)
-```
 
 ## download all pdb's
 ```{r}
@@ -115,7 +105,7 @@ pdb_missing
 for (pdb_entry in pdb_missing) {
   print(pdb_entry)
   tryCatch({
-    pdb_object <- read.pdb(pdb_entry, rm.alt = FALSE)
+    pdb_object <- read.pdb.custom(pdb_entry, rm.alt = FALSE)
     write.pdb(pdb = pdb_object, file = paste0(pdbs_path, pdb_entry, ".pdb"))
   }, error = function(e) {
     print(paste("Error reading PDB file:", pdb_entry, "- Skipping."))
@@ -127,7 +117,6 @@ pdb_downloads <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "
 pdb_missing <- setdiff(pdb_download_list, pdb_downloads)
 pdb_missing
 ```
-
 #Convert pdb to fasta
 ```{r}
 fasta_content_list <- c() 
@@ -189,3 +178,43 @@ missing_fasta <- setdiff(pdb_downloads,
 missing_fasta
 ```
 
+# Data structural long format with title 
+```{r}
+data_structural_long <- data_structural %>%
+  separate_rows(`PDB entry`, sep = ", ") %>%
+  mutate(PDB = `PDB entry`) %>%
+  select(-`PDB entry`)
+
+pdb_titles <- c()
+
+for (pdb_entry in data_structural_long$PDB) {
+  print(pdb_entry)
+  pdb_file <- paste0(pdbs_path, pdb_entry, ".pdb")
+  
+  if (file.exists(pdb_file)) {
+    pdb_lines <- readLines(pdb_file)
+    
+    # Extract lines starting with "TITLE"
+    title_lines <- grep("^TITLE", pdb_lines, value = TRUE)
+    
+    # Remove "TITLE" from each line and trim whitespace
+    clean_title_lines <- str_trim(gsub("^TITLE\\s+\\d*\\s*", "", title_lines))
+    
+    # Concatenate into a single string
+    pdb_title <- paste(clean_title_lines, collapse = " ")
+    print(pdb_title)
+  } else {
+    print("pdb doesn't exist")
+    pdb_title <- NA  # Handle missing files
+  }
+  
+  pdb_titles <- c(pdb_titles, pdb_title)
+}
+
+# Add the pdb_title column to the dataframe
+data_structural_long$pdb_title <- pdb_titles
+
+write.csv(data_structural_long,
+          "data/Pneumoproteins_PDB_structuralData_long.csv", 
+          row.names=FALSE)
+```
