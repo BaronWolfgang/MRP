@@ -54,6 +54,7 @@ data_predictions_sequencebased %>%
   filter(if_any(everything(), is.na))
 ```
 
+
 ```{r}
 data_predictions_structurebased <- full_join(
   data_Epigraph %>%
@@ -84,6 +85,10 @@ data_predictions_structurebased <- data_predictions_structurebased #%>%
 
 
 ```{r}
+data_predictions_structurebased %>% filter(PDB == "2BIB")
+```
+
+```{r}
 data_predictions <- full_join(
   data_predictions_sequencebased,
   data_predictions_structurebased,
@@ -100,7 +105,7 @@ data_predictions
 ```
 
 ### get the protein names 
-names are not consisten betwen the structural and protein panel data, so they have to be cleaned
+names are not consistent between the structural and protein panel data, so they have to be cleaned
 ```{r}
 data_namesclasspdb <- data_structural %>%
   separate_rows(`PDB entry`, sep = ", ") %>%
@@ -227,7 +232,7 @@ for (pdb_entry in unique(data_predictions$PDB)) {
 
 
 ###heatmap (pheatmap)
-```{r, fig.width = 14}
+```{, fig.width = 14}
 for (pdb_entry in unique(data_predictions_normalized$PDB)) {
   data_predictions_normalised_subset <- data_predictions_normalized %>% na.omit() %>%
     filter(PDB == pdb_entry) 
@@ -261,7 +266,7 @@ for (pdb_entry in unique(data_predictions_normalized$PDB)) {
 }
 ```
 
-```{r, fig.width=14}
+```{, fig.width=14}
 for (pdb_entry in unique(data_predictions_normalized$PDB)[2]) {
   data_predictions_normalised_subset <- data_predictions_normalized %>% na.omit() %>%
     filter(PDB == pdb_entry) 
@@ -601,7 +606,7 @@ ggplot(pca_scores, aes(x = PC1, y = PC2, label = score_type)) +
 
 # Variability
 matching variability consensus sequence to epitope predictions sequences
-## mutations_data_with_resno
+## variability_data_with_resno
 ```{r}
 data_variability <- read.csv("output/data_variability.csv")
 
@@ -624,6 +629,14 @@ setdiff(
 )
 ```
 
+## msa pdbseq with protein
+```{r}
+
+```
+
+FIXME: Currently we filter out all consensus_res with character "-", but it might be better to just align the pdb sequence to the variability profile
+
+## match consensus seq to pdbseq
 ```{r}
 data_variability_with_resno <- NULL
 
@@ -632,8 +645,14 @@ for (pdb_entry in na.omit(unique(data_predictions$PDB))) {
   
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
-  data_variability_subset <- data_variability %>% filter(PDB == pdb_entry, consensus_res != "*") %>% 
-    mutate(Position = position) %>% select(!position)
+  data_variability_subset <- data_variability %>% 
+    filter(
+      PDB == pdb_entry,
+      consensus_res != "*", 
+      consensus_res != "-"
+      ) %>% 
+    mutate(Position = row_number()) %>% 
+    select(!position)
   
   consensus_sequence <- data_variability_subset %>%
     pull(consensus_res) %>% 
@@ -659,6 +678,7 @@ data_variability_with_resno %>%
     if_any(everything(), is.na))
 ```
 
+
 ```{, test}
 for (pdb_entry in unique(data_predictions$PDB)[2]) {
   print(pdb_entry)
@@ -681,12 +701,20 @@ for (pdb_entry in unique(data_predictions$PDB)[2]) {
 ```{r}
 data_predictions_with_variability <- full_join(data_predictions,
                                                 data_variability_with_resno %>% 
-                                                  select(PDB, chain, resno, resid,  consensus_res, var_counts,
+                                                  select(protein, proteinclass, PDB, chain, resno, resid,  consensus_res, var_counts,
                                                          var_freq, n_seq,seq_length),
                                                 by = c("PDB", "chain","resno","resid"))
 
 data_predictions_with_variability %>%
   filter(if_any(everything(), is.na))
+```
+
+```{}
+data_predictions_with_variability %>% filter(PDB == "2WW8", resno == 211)
+data_variability_with_resno %>% filter(PDB == "2WW8", resno == 211)
+data_predictions %>% filter(PDB == "2WW8", resno == 211)
+data_predictions_sequencebased %>% filter(PDB == "2WW8", resno == 211)
+data_predictions_structurebased %>% filter(PDB == "2WW8", resno == 211)
 ```
 
 
@@ -705,7 +733,7 @@ pivot_list <- c(
   "var_freq"
 )
 
-for (pdb_entry in na.omit(unique(data_predictions_with_variability$PDB))[1]) {
+for (pdb_entry in na.omit(unique(data_predictions_with_variability$PDB))) {
   data_subset <- data_predictions_with_variability %>%    
     filter(PDB == pdb_entry)  
   
@@ -774,7 +802,7 @@ data_predictions_with_variability_normalized <- data_predictions_with_variabilit
   group_by(PDB) %>%
   mutate(
     across(
-      c(`BepiPred-3.0 score` , `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq), 
+      c(`BepiPred-3.0 score` , `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, Epigraph_score), 
       rescale
     )
   ) %>%
@@ -789,7 +817,7 @@ data_predictions_with_variability_normalized
 for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
   data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
   
-  protein_name <- unique(data_subset$proteinname)
+  protein_name <- unique(data_subset$protein)
   
   print(PDB_entry)
  
@@ -800,7 +828,7 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
     data_subset_wide <- data_subset_chain %>%
       select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
              `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
-      distinct() %>%
+      #distinct() %>%
       column_to_rownames("resno") %>%
       as.data.frame()
     
@@ -870,5 +898,401 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
   }
 }
 ```
+
+##### clustered
+```{, fig.width=14}
+for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  
+  protein_name <- unique(data_subset$proteinname)
+  
+  print(PDB_entry)
+ 
+  for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    data_subset_wide <- data_subset_chain %>%
+      select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+      distinct() %>%
+      column_to_rownames("resno") %>%
+      as.data.frame()
+    
+    bar_data <- data_subset_wide$var_freq
+    names(bar_data) <- rownames(data_subset_wide)
+    
+    data_subset_wide <- data_subset_wide %>% select(-var_freq, -`BepiPred-2.0 probability`)
+    
+    heatmap_matrix <- t(data_subset_wide)
+    
+    top_annot <- HeatmapAnnotation(
+      `Variability` = anno_barplot(
+        bar_data, 
+        gp = gpar(fill = "gray30"), 
+        border = FALSE, 
+        bar_width = 1, 
+        ylim = c(0,1),
+        axis_param = list(
+          at = seq(0, 1, by = 0.2),
+          labels = seq(0, 1, by = 0.2)
+        )
+      ),
+      show_annotation_name = TRUE,
+      annotation_name_side = "left",
+      height = unit(4, "cm")
+    )
+    
+    residues <- as.numeric(colnames(heatmap_matrix))
+    
+    colorbar_df <- get_residueindex_colors(residues, rev = FALSE)
+    
+    annotation_df <- data.frame(NGL_Color = as.character(residues))
+    rownames(annotation_df) <- as.character(residues)
+    
+    annotation_colors <- list(
+      NGL_Color = setNames(colorbar_df$color, as.character(residues))
+    )
+    
+    bottom_annot <- HeatmapAnnotation(
+      `Residue Index` = annotation_df$NGL_Color,
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      annotation_name_side = "right",
+      show_legend = FALSE,
+      which = "column"
+    )
+
+    ht <- Heatmap(
+      heatmap_matrix,
+      name = "Score",
+      cluster_rows = TRUE,
+      cluster_columns = TRUE,
+      column_title = paste0(PDB_entry, " chain ", chain_index, " (", protein_name, ")"),
+      col = colorRampPalette(c("blue", "gray95", "red"))(50),
+      top_annotation = top_annot,
+      bottom_annotation = bottom_annot,
+      show_column_names = FALSE
+    )
+    
+    figure <- draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+    
+    print(figure)
+    
+    #ggsave(filename = paste0("output/figures/heatmap/variability/", pdb_entry, "_", chain_index, "_heatmap.png"), 
+    #       plot = figure, 
+    #       width = 14, height = 10, dpi = 300,
+    #       bg="white")
+  }
+}
+```
+
+```{, fig.with = 14}
+maxdist <- 10
+
+for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)[3]) {
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  
+  protein_name <- unique(data_subset$proteinname)
+  
+  print(PDB_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+ 
+  for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    data_subset_wide <- data_subset_chain %>%
+      select(resno, `BepiPred-2.0 probability`, `BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+      distinct() %>%
+      column_to_rownames("resno") %>%
+      as.data.frame()
+    
+    bar_data <- data_subset_wide$var_freq
+    names(bar_data) <- rownames(data_subset_wide)
+    
+    # Remove the var_freq and 'BepiPred-2.0 probability' columns for the heatmap data
+    data_subset_wide <- data_subset_wide %>% select(-var_freq, -`BepiPred-2.0 probability`)
+    
+    heatmap_matrix <- t(data_subset_wide)
+    
+    top_annot <- HeatmapAnnotation(
+      `Variability` = anno_barplot(
+        bar_data, 
+        gp = gpar(fill = "gray30"), 
+        border = FALSE, 
+        bar_width = 1, 
+        ylim = c(0, 1),
+        axis_param = list(
+          at = seq(0, 1, by = 0.2),
+          labels = seq(0, 1, by = 0.2)
+        )
+      ),
+      show_annotation_name = TRUE,
+      annotation_name_side = "left",
+      height = unit(4, "cm")
+    )
+    
+    residues <- as.numeric(colnames(heatmap_matrix))
+    
+    resnos <- pdb_object$atom %>% filter(chain == chain_id, elety == "CA", type == "ATOM") %>% pull(resno)
+    
+    # Create the xyz distance matrix for residues
+    ca.inds <- atom.select(pdb_object, chain = chain_index, elety = "CA", type = "ATOM")
+    coords <- pdb_object$xyz[ca.inds$xyz]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    rownames(dist.mat) <- as.character(resnos)
+    colnames(dist.mat) <- as.character(resnos)
+    
+    shared <- intersect(resnos, residues)
+    setdiff(resnos, residues)
+    
+    dist.mat <- dist.mat[shared,shared]
+    
+    #rownames(dist.mat) <- residues
+    #colnames(dist.mat) <- residues
+    
+    # Perform hierarchical clustering on the rows
+    row_clustering <- hclust(as.dist(dist.mat), method = "complete")  # You can change the method to "single", "average", etc.
+    
+    # Order the residues based on the clustering
+    heatmap_matrix <- heatmap_matrix[, intersect(resnos, residues)]
+    heatmap_matrix <- heatmap_matrix[, row_clustering$order]
+    
+    colorbar_df <- get_residueindex_colors(residues, rev = FALSE)
+    
+    annotation_df <- data.frame(NGL_Color = as.character(residues))
+    rownames(annotation_df) <- as.character(residues)
+    
+    annotation_colors <- list(
+      NGL_Color = setNames(colorbar_df$color, as.character(residues))
+    )
+    
+    bottom_annot <- HeatmapAnnotation(
+      `Residue Index` = annotation_df$NGL_Color,
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      annotation_name_side = "right",
+      show_legend = FALSE,
+      which = "column"
+    )
+
+    # Plot heatmap with hierarchical clustering of rows
+    ht <- Heatmap(
+      heatmap_matrix,
+      name = "Score",
+      cluster_rows = row_clustering,  # Use pre-clustered rows (row_clustering)
+      cluster_columns = TRUE,  # Optional: Cluster columns as well
+      column_title = paste0(PDB_entry, " chain ", chain_index, " (", protein_name, ")"),
+      col = colorRampPalette(c("blue", "gray95", "red"))(50),
+      top_annotation = top_annot,
+      bottom_annotation = bottom_annot,
+      show_column_names = FALSE
+    )
+    
+    figure <- draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+    
+    print(figure)
+    
+    # Optionally save the plot
+    # ggsave(filename = paste0("output/figures/heatmap/variability/", pdb_entry, "_", chain_index, "_heatmap.png"), 
+    #        plot = figure, 
+    #        width = 14, height = 10, dpi = 300,
+    #        bg="white")
+  }
+}
+
+```
+
+## Scatterplot
+```{r, fig.width=14,warning=FALSE}
+pivot_list <- c(
+  "BepiPred-2.0 probability", 
+  # "RSA NetsurfP", 
+  "BepiPred-3.0 score",
+  # "BepiPred-3.0 linear epitope score", 
+  # "DiscoTope-3.0_score",
+  "DiscoTope-3.0_calibrated_score", 
+  # "RSA Shrake-Rupley", 
+  "Epigraph_score"
+)
+
+for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  
+  protein_name <- unique(data_subset$protein)
+  
+  print(PDB_entry)
+ 
+  for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    data_subset_long <- data_subset_chain %>%
+      select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+      pivot_longer(cols = pivot_list, 
+                   names_to = "Score_Type", values_to = "Score_Value") 
+    
+    plot <- data_subset_long %>% 
+      ggplot(aes(x=var_freq,y=Score_Value)) +
+      
+      geom_smooth(
+        aes(color = Score_Type, group = Score_Type),
+        method = "lm",
+        se = FALSE, linewidth = 2
+      ) +
+      stat_regline_equation(aes(label = ..rr.label.., group = Score_Type, color = Score_Type), label.x = 0.05, size = 5) +
+      scale_color_manual(
+        values = setNames(
+          c(
+            palette.colors()[7],
+            palette.colors()[6],
+            palette.colors()[4],
+            palette.colors()[8]
+          ),
+          pivot_list[1:4]
+        ),
+        name = "Score_Type"
+      ) +
+      
+      new_scale_color() +
+      geom_point(aes(color = resno, shape = Score_Type), size=3) +
+      scale_color_gradientn(
+        colors = rainbow_ngl,
+        limits = c(0, max(data_subset_long$resno)),
+        name = "Residue number"
+      ) +
+      scale_x_continuous(
+        limit = c(0,NA)
+      ) +
+      labs(
+      title = paste0(PDB_entry, " chain ", data_subset$chain[1], " (",data_subset$protein[1],")"),
+      x = "Residue variability",
+      y = "Epitope prediction score"
+        ) +
+      theme_bw() #+
+      #guides(
+      #  shape = guide_legend(
+      #    override.aes = list(
+      #      color = setNames(
+      #        c(
+      #          palette.colors()[7],
+      #          palette.colors()[6],
+      #          palette.colors()[4],
+      #          palette.colors()[8]
+      #        ),
+      #        pivot_list[1:4]
+      #      )
+      #    )
+      #  )
+      #)
+      
+      print(plot)
+      
+      ggsave(filename = paste0("output/figures/scatterplot/merged/", PDB_entry, "_", chain_index, "_merged.png"), 
+           plot = plot, 
+           width = 14, height = 10, dpi = 300,
+           bg="white")
+  }
+}
+```
+
+```{r, fig.width=14, warning=FALSE}
+pivot_list <- c(
+  "BepiPred-2.0 probability", 
+  # "RSA NetsurfP", 
+  "BepiPred-3.0 score",
+  # "BepiPred-3.0 linear epitope score", 
+  # "DiscoTope-3.0_score",
+  "DiscoTope-3.0_calibrated_score", 
+  # "RSA Shrake-Rupley", 
+  "Epigraph_score"
+)
+
+for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  
+  protein_name <- unique(data_subset$protein)
+  
+  print(PDB_entry)
+ 
+  for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    data_subset_long <- data_subset_chain %>%
+      select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+      pivot_longer(cols = pivot_list, 
+                   names_to = "Score_Type", values_to = "Score_Value") 
+    
+    plot <- data_subset_long %>% 
+      ggplot(aes(x=var_freq,y=Score_Value)) +
+      
+      geom_smooth(
+        aes(group = Score_Type),
+        method = "lm",
+        se = FALSE, size = 2, color="black"
+      ) +
+      scale_color_manual(
+        values = setNames(
+          c(
+            palette.colors()[7],
+            palette.colors()[6],
+            palette.colors()[4],
+            palette.colors()[8]
+          ),
+          pivot_list[1:4]
+        ),
+        name = "Score_Type"
+      ) +
+      new_scale_color() +
+      geom_point(aes(color = resno), size=3) +
+      scale_color_gradientn(
+        colors = rainbow_ngl,
+        limits = c(0, max(data_subset_long$resno)),
+        name = "Residue number"
+      ) +
+      scale_x_continuous(
+        limit = c(0,NA)
+      ) +
+      stat_regline_equation(aes(label = ..rr.label..), label.x = 0.05, size = 5) +
+      facet_wrap(~Score_Type, nrow=2) +
+        
+      labs(
+      title = paste0(PDB_entry, " chain ", data_subset$chain[1], " (",data_subset$protein[1],")"),
+      x = "Residue variability",
+      y = "Epitope prediction score"
+        ) +
+      theme_bw() #+
+      #guides(
+      #  shape = guide_legend(
+      #    override.aes = list(
+      #      color = setNames(
+      #        c(
+      #          palette.colors()[7],
+      #          palette.colors()[6],
+      #          palette.colors()[4],
+      #          palette.colors()[8]
+      #        ),
+      #        pivot_list[1:4]
+      #      )
+      #    )
+      #  )
+      #)
+      
+      print(plot)
+      
+      ggsave(filename = paste0("output/figures/scatterplot/wrapped/", PDB_entry, "_", chain_index, "_wrapped.png"), 
+           plot = plot, 
+           width = 14, height = 10, dpi = 300,
+           bg="white")
+  }
+}
+```
+
 
 

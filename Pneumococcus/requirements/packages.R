@@ -1,5 +1,5 @@
 data_management_packages_to_install <- c("data.table", "tidyverse" ,"readxl","purrr","readr","scales","msa","jsonlite")
-data_visualisation_packages_to_install <- c("ggplot2","cowplot","pheatmap","viridisLite","ggseqlogo")
+data_visualisation_packages_to_install <- c("ggplot2","cowplot","pheatmap","viridisLite","ggseqlogo","circlize","ggpubr", "ggnewscale")
 structural_packages_to_install <- c("bio3d","NGLVieweR", "htmlwidgets","htmltools")
 
 packages_to_install <- c(data_management_packages_to_install, 
@@ -14,7 +14,7 @@ for (package in packages_to_install) {
   library(package, character.only = TRUE)
 }
 
-BiocManager_packages_to_install <- c("Biostrings","pwalign","ComplexHeatmap")
+BiocManager_packages_to_install <- c("Biostrings","pwalign","ComplexHeatmap", "DECIPHER")
 
 if (!require("BiocManager", quietly = TRUE))
   install.packages("BiocManager")

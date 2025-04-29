@@ -7,6 +7,7 @@ map.seqposno.to.resno <- function(sequence_AA1, pdb_object, verbose=FALSE) {
   longest_chain <- pdb_object$atom %>%
     filter(type == "ATOM",
            elety == "CA",
+           alt %in% c(NA, "A"),
            resid %in% toupper(AMINO_ACID_CODE)) %>%
     add_count(chain, name = "chain_length") %>%
     arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
@@ -15,7 +16,17 @@ map.seqposno.to.resno <- function(sequence_AA1, pdb_object, verbose=FALSE) {
     pull(chain) %>%
     unique()
     
-  subject <- pdbseq(pdb_object, inds = atom.select(pdb_object, type ="ATOM", elety="CA", chain=longest_chain))
+  ca_atoms <- pdb_object$atom %>%
+    filter(
+      type == "ATOM",
+      elety == "CA",
+      chain == longest_chain,
+      alt %in% c(NA, "A"),
+      resid %in% toupper(AMINO_ACID_CODE)
+    )
+  
+  subject <- aa321(ca_atoms$resid)
+  names(subject) <- ca_atoms$resno
   
   subject_resno <- as.numeric(names(subject))
   subject_seq <- str_c(
@@ -69,6 +80,7 @@ map.seqresno.to.resno <- function(pdb_object, verbose=FALSE) {
   subject_seq <- pdb_object$atom %>%
     filter(type == "ATOM",
            elety == "CA",
+           alt %in% c(NA, "A"),
            resid %in% toupper(AMINO_ACID_CODE)) %>%
     select(resno, resid) %>%
     distinct(.keep_all = TRUE) %>%
@@ -84,8 +96,10 @@ map.seqresno.to.resno <- function(pdb_object, verbose=FALSE) {
 # create resmap
 create.resmap <- function(pdb_atom_df, epitope_prediction_df,required_adjustment, join_by = c("resno")) {
   resmap_df <- pdb_atom_df %>% 
-    filter(type == "ATOM",
+    filter(!is.na(chain),
+           type == "ATOM",
            elety == "CA",
+           alt %in% c(NA, "A"),
            resid %in% toupper(AMINO_ACID_CODE)) %>%
     select(resid,resno,chain) %>%
     full_join(epitope_prediction_df %>%

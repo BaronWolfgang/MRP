@@ -30,12 +30,11 @@ pdb_files_list
 #FIXME: maybe move all repeated paths to a single file that is shared, similar to functions
 
 #Bio3d 
-##pheatmap
 Using EpiGraph same epitope definitions
 
 Definition of neighbours matter: https://pmc.ncbi.nlm.nih.gov/articles/PMC6622159/
 
-### base
+## base
 ```{r}
 maxdist <- 10
 
@@ -50,7 +49,13 @@ for (pdb_entry in pdb_files_list[3]) {
     cat("  Processing chain:", chain_id, "\n")
     
     ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
-    coords <- pdb_object$xyz[ca.inds$xyz]
+    #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
+    ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
+      filter(
+        alt %in% c(NA, "A")
+      )
+    
+    coords <- pdb_object$xyz[atom2xyz(ca_atoms$eleno)]
     
     dist.mat <- dist.xyz(coords)
     
@@ -109,24 +114,49 @@ for (pdb_entry in pdb_files_list[3]) {
 
 ### no upper
 ```{r}
-maxdist <- 10
+cutoffdist <- 10
+maxdist <- 50
 
-for (pdb_entry in pdb_files_list[3]) {
+for (pdb_entry in pdb_files_list) {
   print(pdb_entry)
   
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
-  chains <- unique(pdb_object$atom$chain)
+  #Only take chains which have atom records and CA atoms
+  chains <- unique(pdb_object$atom %>% 
+                     filter(
+                       elety == "CA", 
+                       type == "ATOM"
+                     ) %>% 
+                     pull(chain))
   
   for (chain_id in chains) {
     cat("  Processing chain:", chain_id, "\n")
     
-    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
-    coords <- pdb_object$xyz[ca.inds$xyz]
+    ca.inds <- atom.select(
+      pdb_object, 
+      chain = chain_id, 
+      elety = "CA", 
+      type = "ATOM"
+    )
+    
+    #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
+    ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
+      filter(
+        alt %in% c(NA, "A")
+      )
+    
+    coords <- pdb_object$xyz[atom2xyz(ca_atoms$eleno)]
     
     dist.mat <- dist.xyz(coords)
     
-    resnos <- pdb_object$atom %>% filter(chain == chain_id, elety == "CA", type == "ATOM") %>% pull(resno)
+    resnos <- pdb_object$atom %>% filter(
+      chain == chain_id, 
+      elety == "CA", 
+      type == "ATOM",
+      alt %in% c(NA, "A")
+    ) %>% 
+      pull(resno) 
     
     # Assign names to distance matrix
     rownames(dist.mat) <- resnos
@@ -164,7 +194,10 @@ for (pdb_entry in pdb_files_list[3]) {
     ht <- Heatmap(
       dist.mat,
       name = "Distance (Å)",
-      col = colorRamp2(seq(0, maxdist, length.out=100), rev(viridisLite::viridis(100))),
+      col = colorRamp2(
+        c(seq(0, cutoffdist, length.out=20),maxdist), 
+        c(rev(viridis(20)), "black")
+        ),
       na_col = "white",
       cluster_rows = FALSE,
       cluster_columns = FALSE,
@@ -173,13 +206,33 @@ for (pdb_entry in pdb_files_list[3]) {
       row_title = NULL,
       column_title = paste0("Protein contact map (Ca): ", pdb_entry, " (Chain ", chain_id, ")"),
       bottom_annotation = bottom_annot,
-      right_annotation = right_annot
+      right_annotation = right_annot,
+      
+      #heatmap_legend_param = list(
+      #  at = c(seq(0, cutoffdist, length.out = 5), maxdist),
+      #  labels = round(c(seq(0, cutoffdist, length.out = 5), maxdist), 1)
+      #)
+      
+      heatmap_legend_param = list(
+        at = c(0, cutoffdist/2, cutoffdist, maxdist),   # Only these 3 points
+        labels = c("0", round(cutoffdist/2, 1), round(cutoffdist, 1), round(maxdist, 1))  # Labels for the breaks
+      )
     )
     
     draw(ht, heatmap_legend_side = "right")
   }
 }
 ```
+
+```{r}
+length(resnos)
+length(coords)
+```
+
+```{r}
+atom.select.pdb
+```
+
 
 ### diagonals removed
 ```{r, fig.witdh=14}
@@ -191,13 +244,24 @@ for (pdb_entry in pdb_files_list[2]) {
   
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
-  chains <- unique(pdb_object$atom$chain)
+  chains <- unique(pdb_object$atom %>% 
+                     filter(
+                       elety == "CA", 
+                       type == "ATOM"
+                     ) %>% 
+                     pull(chain))
   
   for (chain_id in chains) {
     cat("  Processing chain:", chain_id, "\n")
     
     ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
-    coords <- pdb_object$xyz[ca.inds$xyz]
+    #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
+    ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
+      filter(
+        alt %in% c(NA, "A")
+      )
+    
+    coords <- pdb_object$xyz[atom2xyz(ca_atoms$eleno)]
     
     dist.mat <- dist.xyz(coords)
     
@@ -265,25 +329,126 @@ for (pdb_entry in pdb_files_list[2]) {
 }
 ```
 
-### igraph
+## clustering
+```{r}
+maxdist <- 10
+
+for (pdb_entry in pdb_files_list[3]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom %>% 
+                     filter(
+                       elety == "CA", 
+                       type == "ATOM"
+                     ) %>% 
+                     pull(chain))
+  
+  for (chain_id in chains) {
+    cat("  Processing chain:", chain_id, "\n")
+    
+    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+        #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
+    ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
+      filter(
+        alt %in% c(NA, "A")
+      )
+    
+    coords <- pdb_object$xyz[atom2xyz(ca_atoms$eleno)]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    resnos <- pdb_object$atom %>% filter(chain == chain_id, elety == "CA", type == "ATOM") %>% pull(resno)
+    
+    # Assign names to distance matrix
+    rownames(dist.mat) <- resnos
+    colnames(dist.mat) <- resnos
+    
+    diag(dist.mat) <- NA
+    
+    dist.mat <- dist.mat[rev(rownames(dist.mat)), ]
+    
+    colorbar_df <- get_residueindex_colors(resnos, rev = FALSE)
+    
+    annotation_df <- data.frame(NGL_Color = as.character(resnos))
+    rownames(annotation_df) <- as.character(resnos)
+    
+    annotation_colors <- list(
+      NGL_Color = setNames(colorbar_df$color, as.character(resnos))
+    )
+    
+    bottom_annot <- HeatmapAnnotation(
+      `Residue Index` = annotation_df$NGL_Color,
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      annotation_name_side = "right",
+      show_legend = FALSE,
+      which = "column"
+    )
+    
+    right_annot <- rowAnnotation(
+      `Residue Index` = rownames(dist.mat),
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      show_annotation_name = FALSE,
+      show_legend = FALSE
+    )
+    
+    row_clustering <- hclust(dist(dist.mat), method = "complete")
+    
+    # Plot heatmap
+    ht <- Heatmap(
+      dist.mat,
+      name = "Distance (Å)",
+      col = colorRamp2(seq(0, maxdist, length.out=100), rev(viridisLite::viridis(100))),
+      na_col = "white",
+      cluster_rows = row_clustering,
+      cluster_columns = FALSE,
+      show_row_names = FALSE,
+      show_column_names = FALSE,
+      row_title = NULL,
+      column_title = paste0("Protein contact map (Ca): ", pdb_entry, " (Chain ", chain_id, ")"),
+      bottom_annotation = bottom_annot,
+      right_annotation = right_annot
+    )
+    
+    draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+  }
+}
+```
+
+
+# igraph
 ```{r}
 install.packages("igraph")
 library("igraph")
 ```
 
 ```{r, fig.width=14}
+set.seed(335)
+
 for (pdb_entry in pdb_files_list[2]) {
   print(pdb_entry)
   
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
-  chains <- unique(pdb_object$atom$chain)
+  chains <- unique(pdb_object$atom %>% 
+                     filter(
+                       elety == "CA", 
+                       type == "ATOM"
+                     ) %>% 
+                     pull(chain))
   
   for (chain_id in chains) {
     cat("  Processing chain:", chain_id, "\n")
     
     ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
-    coords <- pdb_object$xyz[ca.inds$xyz]
+        #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
+    ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
+      filter(
+        alt %in% c(NA, "A")
+      )
+    
+    coords <- pdb_object$xyz[atom2xyz(ca_atoms$eleno)]
     
     dist.mat <- dist.xyz(coords)
     
@@ -334,12 +499,19 @@ for (pdb_entry in pdb_files_list[2]) {
 
 #### with scores
 ```{r, fig.width=14}
+set.seed(335)
+
 for (pdb_entry in pdb_files_list[3]) {
   print(pdb_entry)
   
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
-  chains <- unique(pdb_object$atom$chain)
+  chains <- unique(pdb_object$atom %>% 
+                     filter(
+                       elety == "CA", 
+                       type == "ATOM"
+                     ) %>% 
+                     pull(chain))
   
   data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == pdb_entry)
   
@@ -348,8 +520,14 @@ for (pdb_entry in pdb_files_list[3]) {
   for (chain_index in chains) {
     cat("  Processing chain:", chain_index, "\n")
     
-    ca.inds <- atom.select(pdb_object, chain = chain_index, elety = "CA", type = "ATOM")
-    coords <- pdb_object$xyz[ca.inds$xyz]
+    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+        #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
+    ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
+      filter(
+        alt %in% c(NA, "A")
+      )
+    
+    coords <- pdb_object$xyz[atom2xyz(ca_atoms$eleno)]
     
     dist.mat <- dist.xyz(coords)
     
@@ -434,7 +612,12 @@ for (pdb_entry in pdb_files_list[3]) {
   
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
-  chains <- unique(pdb_object$atom$chain)
+  chains <- unique(pdb_object$atom %>% 
+                     filter(
+                       elety == "CA", 
+                       type == "ATOM"
+                     ) %>% 
+                     pull(chain))
   
   data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == pdb_entry)
   
@@ -443,8 +626,14 @@ for (pdb_entry in pdb_files_list[3]) {
   for (chain_index in chains) {
     cat("  Processing chain:", chain_index, "\n")
     
-    ca.inds <- atom.select(pdb_object, chain = chain_index, elety = "CA", type = "ATOM")
-    coords <- pdb_object$xyz[ca.inds$xyz]
+    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+        #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
+    ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
+      filter(
+        alt %in% c(NA, "A")
+      )
+    
+    coords <- pdb_object$xyz[atom2xyz(ca_atoms$eleno)]
     
     dist.mat <- dist.xyz(coords)
     
@@ -530,7 +719,12 @@ for (pdb_entry in pdb_files_list[3]) {
   
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
-  chains <- unique(pdb_object$atom$chain)
+  chains <- unique(pdb_object$atom %>% 
+                     filter(
+                       elety == "CA", 
+                       type == "ATOM"
+                     ) %>% 
+                     pull(chain))
   
   data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == pdb_entry)
   
@@ -539,8 +733,14 @@ for (pdb_entry in pdb_files_list[3]) {
   for (chain_index in chains) {
     cat("  Processing chain:", chain_index, "\n")
     
-    ca.inds <- atom.select(pdb_object, chain = chain_index, elety = "CA", type = "ATOM")
-    coords <- pdb_object$xyz[ca.inds$xyz]
+    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+        #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
+    ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
+      filter(
+        alt %in% c(NA, "A")
+      )
+    
+    coords <- pdb_object$xyz[atom2xyz(ca_atoms$eleno)]
     
     dist.mat <- dist.xyz(coords)
     
@@ -630,14 +830,24 @@ for (pdb_entry in pdb_files_list[1:3]) {
   
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
-  chains <- unique(pdb_object$atom$chain)
+  chains <- unique(pdb_object$atom %>% 
+                     filter(
+                       elety == "CA", 
+                       type == "ATOM"
+                     ) %>% 
+                     pull(chain))
   
   for (chain_id in chains) {
     cat("  Processing chain:", chain_id, "\n")
     
-    # Select C-alpha atoms only for the specific chain
-    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA")
-    coords <- pdb_object$xyz[ca.inds$xyz]
+    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+        #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
+    ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
+      filter(
+        alt %in% c(NA, "A")
+      )
+    
+    coords <- pdb_object$xyz[atom2xyz(ca_atoms$eleno)]
     
     dist.mat <- dist.xyz(coords)
     

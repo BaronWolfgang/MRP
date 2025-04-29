@@ -140,6 +140,11 @@ for (pdb_entry in pdb_files_list) {
 data_BepiPred_3_with_resno
 ```
 
+```{r}
+data_BepiPred_3_with_resno %>% filter(Accession == "2WWD")
+```
+
+
 ## Store results as csv
 ```{r}
 write.csv(data_BepiPred_3_with_resno,
@@ -172,6 +177,9 @@ data_DiscoTope <- data_DiscoTope %>%
 
 data_DiscoTope
 ```
+
+
+
 
 ## Store results as csv
 ```{r}
@@ -216,7 +224,7 @@ data_Epigraph
 ```
 
 ```{r}
-data_Epigraph_subset <- data_Epigraph %>% filter(PDB == "3ZPP")
+data_Epigraph_subset <- data_Epigraph %>% filter(PDB == "2BIB")
 
 plot_epigraph <- data_Epigraph_subset %>% 
     ggplot(aes(x=resno, y=Score, fill=Score)) +

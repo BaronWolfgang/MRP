@@ -151,6 +151,7 @@ for(pdb_entry in pdb_downloads) {
     fasta_sequence <- pdb_object$atom %>%
       filter(type == "ATOM",
              elety == "CA",
+             alt %in% c(NA, "A"),
              resid %in% toupper(AMINO_ACID_CODE)[1:20]) %>%
       add_count(chain, name = "chain_length") %>%
       arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
