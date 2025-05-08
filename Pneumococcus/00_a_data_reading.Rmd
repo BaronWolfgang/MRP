@@ -91,7 +91,6 @@ pdb_download_list
 ```
 
 ```{r}
-pdbs_path = "data/pdb/"
 get.pdb(ids = pdb_download_list, path = pdbs_path, overwrite = TRUE)
 ```
 
@@ -105,7 +104,7 @@ pdb_missing
 for (pdb_entry in pdb_missing) {
   print(pdb_entry)
   tryCatch({
-    pdb_object <- read.pdb.custom(pdb_entry, rm.alt = FALSE)
+    pdb_object <- read.pdb.custom(pdb_entry)
     write.pdb(pdb = pdb_object, file = paste0(pdbs_path, pdb_entry, ".pdb"))
   }, error = function(e) {
     print(paste("Error reading PDB file:", pdb_entry, "- Skipping."))
@@ -117,6 +116,7 @@ pdb_downloads <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "
 pdb_missing <- setdiff(pdb_download_list, pdb_downloads)
 pdb_missing
 ```
+
 #Convert pdb to fasta
 ```{r}
 fasta_content_list <- c() 
@@ -158,6 +158,7 @@ for(pdb_entry in pdb_downloads) {
       filter(chain_length == max(chain_length)) %>%
       filter(chain == min(chain)) %>%
       pull(resid) %>%
+      aa321() %>%
       str_c(collapse = "")
   }
   

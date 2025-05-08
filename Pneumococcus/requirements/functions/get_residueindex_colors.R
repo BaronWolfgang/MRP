@@ -21,7 +21,7 @@ get_residueindex_colors_v2 <- function(residues, rev = FALSE) {
   if (rev) palette <- rev(palette)
   
   # Create color interpolation function
-  color_fun <- colorRamp2(breaks, palette, space= "sRGB")
+  color_fun <- colorRamp2(breaks, palette, space= "RGB")
   
   raw_colors <- color_fun(residues)
   clean_colors <- substr(raw_colors, 1, 7)  # Keep only #RRGGBB

@@ -1,5 +1,5 @@
 ###
-# Mapping functions to map positions in a given sequence, back to residue numbers in a pdb object.
+# Mapping functions to map positions in a given sequence by finding the exact match between the the structure-based and sequence-based predictions, back to residue numbers in a pdb object.
 ###
 
 ## function map.seqposno.to.resno
@@ -107,4 +107,96 @@ create.resmap <- function(pdb_atom_df, epitope_prediction_df,required_adjustment
               by = join_by
               )
   return(resmap_df)
+}
+
+########
+#For mapping variability to our epitope prediction data, we need a slightly different method as the consensus sequence of the variability data isn't guaranteed to match the prediction data
+########
+map.seq.to.pdb <- function(sequence_AA1, pdb_object, alignment_method = "overlap") {
+  longest_chain <- pdb_object$atom %>%
+    filter(type == "ATOM",
+           elety == "CA",
+           alt %in% c(NA, "A"),
+           resid %in% toupper(AMINO_ACID_CODE)) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%
+    filter(chain_length == max(chain_length)) %>%
+    filter(chain == min(chain)) %>%
+    pull(chain) %>%
+    unique()
+  
+  ca_atoms <- pdb_object$atom %>%
+    filter(
+      type == "ATOM",
+      elety == "CA",
+      chain == longest_chain,
+      alt %in% c(NA, "A"),
+      resid %in% toupper(AMINO_ACID_CODE)
+    )
+  
+  subject <- aa321(ca_atoms$resid)
+  names(subject) <- ca_atoms$resno
+  
+  subject_resno <- as.numeric(names(subject))
+  subject_seq <- str_c(
+    unname(subject),
+    collapse = ""
+  )
+  
+  pattern_seq <- sequence_AA1
+  
+  alignment <- pairwiseAlignment(pattern_seq, subject_seq,
+                                 gapOpening = 5,
+                                 gapExtension = 0,
+                                 type = alignment_method)  # Or "global-local" depending on use case
+  
+  return(alignment)
+}
+
+create.resmap.variability <- function(pdb_atoms_df, variability_df, alignment) {
+  aligned_pattern <- as.character(alignedPattern(alignment))
+  aligned_subject <- as.character(alignedSubject(alignment))
+  
+  pattern_chars <- strsplit(aligned_pattern, "")[[1]]
+  subject_chars <- strsplit(aligned_subject, "")[[1]]
+  
+  stopifnot(length(pattern_chars) == length(subject_chars))
+  
+  resnos_aligned <- vector("numeric", length(subject_chars))
+  pdb_index <- 1
+  
+  for (i in seq_along(subject_chars)) {
+    if (subject_chars[i] == "-") {
+      resnos_aligned[i] <- NA
+    } else {
+      resnos_aligned[i] <- ca_atoms$resno[pdb_index]
+      pdb_index <- pdb_index + 1
+    }
+  }
+  
+  subject_chars[subject_chars == "-"] <- NA
+  
+  pattern_start <- start(ranges(alignment@pattern))
+  subject_start <- start(ranges(alignment@subject))
+  
+  alignment_df <- data.frame(
+    resno = resnos_aligned,
+    consensus_res = pattern_chars,
+    resid = subject_chars,
+    stringsAsFactors = FALSE
+  ) %>%
+    mutate(
+      position_new = pattern_start + row_number() - subject_start,
+      position = pattern_start + cumsum(consensus_res != "-") - subject_start
+      )
+  
+  resmap <- full_join(
+    alignment_df,
+    variability_df, 
+    by = c("position")
+    #by = c("position")
+    )
+  
+  return(resmap)
+  
 }

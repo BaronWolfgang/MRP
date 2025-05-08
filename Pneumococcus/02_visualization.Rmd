@@ -41,8 +41,9 @@ data_predictions_sequencebased <- full_join(
   ,
   
   data_BepiPred_3_with_resno %>%
-    mutate(PDB = Accession) %>%
-    select(PDB, chain, resno, resid, `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`) %>%
+    mutate(PDB = Accession,
+           seqposno = Position) %>%
+    select(PDB, chain, resno, seqposno, resid, `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`) %>%
     filter(resid %in% toupper(AMINO_ACID_CODE))
   ,
   by = c("PDB","chain","resno","resid")
@@ -127,8 +128,8 @@ data_namesclasspdb <- data_structural %>%
       select(proteinclass, panel_proteinname_clean), keep = TRUE,
     by = c("structure_proteinname_clean" = "panel_proteinname_clean")
   ) %>%
-  mutate(proteinname = structure_proteinname_clean) %>%
-  select(proteinclass, proteinname, PDB)
+  mutate(protein = structure_proteinname_clean) %>%
+  select(proteinclass, protein, PDB)
 
 data_namesclasspdb
 ```
@@ -161,7 +162,7 @@ data_predictions_normalized
 ```
 
 ###track
-```{r, warning=FALSE}
+```{, warning=FALSE}
 track_list <- c(
   "BepiPred-2.0 probability", 
   # "RSA NetsurfP", 
@@ -319,7 +320,7 @@ for (pdb_entry in unique(data_predictions_normalized$PDB)[2]) {
 
 ### heatmap (complexheatmap)
 ```{r}
-for (pdb_entry in unique(data_predictions_normalized$PDB)[1:5]) {
+for (pdb_entry in unique(data_predictions_normalized$PDB)) {
   data_predictions_normalised_subset <- data_predictions_normalized %>% na.omit() %>%
     filter(PDB == pdb_entry) 
   
@@ -610,21 +611,17 @@ matching variability consensus sequence to epitope predictions sequences
 ```{r}
 data_variability <- read.csv("output/data_variability.csv")
 
-data_variability <- data_variability %>%
-  left_join(data_namesclasspdb,
-            by = c("protein" = "proteinname"))
-
 data_variability
 ```
 
 ### check the missing ones
 Currently working with PDB entries only, not all proteins have PDB's associated with them, so some are missing
 ```{r}
-sort(unique(data_predictions$proteinname))
+sort(unique(data_predictions$protein))
 sort(unique(data_variability$protein))
 
 setdiff(
-  tolower(unique(data_predictions$proteinname)),
+  tolower(unique(data_predictions$protein)),
   tolower(unique(data_variability$protein))
 )
 ```
@@ -637,47 +634,51 @@ setdiff(
 FIXME: Currently we filter out all consensus_res with character "-", but it might be better to just align the pdb sequence to the variability profile
 
 ## match consensus seq to pdbseq
-```{r}
+```{}
 data_variability_with_resno <- NULL
 
-for (pdb_entry in na.omit(unique(data_predictions$PDB))) {
-  print(pdb_entry) 
+for (pdb_entry in na.omit(unique(data_variability$PDB))) {
+  print(pdb_entry)
   
+  tryCatch({
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
   
-  data_variability_subset <- data_variability %>% 
+  data_variability_subset <- data_variability %>% filter(PDB == pdb_entry)
+  
+  consensus_sequence <- str_c(
+    data_variability_subset %>% filter(consensus_res != "*") %>% pull(consensus_res),
+    collapse = ""
+  )
+  
+  alignment_results <- map.seq.to.pdb(consensus_sequence, pdb_object)
+  
+  ca_atoms <- pdb_object$atom %>%
     filter(
-      PDB == pdb_entry,
-      consensus_res != "*", 
-      consensus_res != "-"
-      ) %>% 
-    mutate(Position = row_number()) %>% 
-    select(!position)
+      type == "ATOM",
+      elety == "CA",
+      alt %in% c(NA, "A"),
+      resid %in% toupper(AMINO_ACID_CODE)
+    )
   
-  consensus_sequence <- data_variability_subset %>%
-    pull(consensus_res) %>% 
-    str_c(collapse = "")
-  
-  required_adjustment <- map.seqposno.to.resno(sequence_AA1 = consensus_sequence, 
-                                               pdb_object = pdb_object)
-  
-  #print(required_adjustment)
+  resmap_variability <- create.resmap.variability(ca_atoms, data_variability_subset, alignment_results)
 
-  resmap <- create.resmap(pdb_object$atom, 
-                          data_variability_subset,
-                          required_adjustment) 
+  if (is.null(data_variability_with_resno)) {
+    data_variability_with_resno <- resmap_variability
+  } else {
+    # Otherwise, rbind the current data to the combined data frame
+    data_variability_with_resno <- rbind(data_variability_with_resno, resmap_variability)
+  }
   
-  data_variability_with_resno <- rbind(data_variability_with_resno, resmap)
-  
+  }, error = function(e) {
+    warning("Failed on PDB entry: ", pdb_entry, "\nReason: ", e$message)
+  })
 }
 
 data_variability_with_resno 
-data_variability_with_resno %>%
-  select(PDB,chain,resno,resid, consensus_res,var_counts,var_freq,n_seq,seq_length) %>%
-  filter(!is.na(chain), !is.na(PDB),
-    if_any(everything(), is.na))
+#data_variability_with_resno %>%
+#  #select(PDB,resno,resid, consensus_res,var_counts,var_freq,n_seq,seq_length) %>%
+#  filter(if_any(everything(), is.na))
 ```
-
 
 ```{, test}
 for (pdb_entry in unique(data_predictions$PDB)[2]) {
@@ -697,25 +698,218 @@ for (pdb_entry in unique(data_predictions$PDB)[2]) {
 }
 ```
 
+```{}
+data_variability_subset
+consensus_sequence
 
-```{r}
-data_predictions_with_variability <- full_join(data_predictions,
-                                                data_variability_with_resno %>% 
-                                                  select(protein, proteinclass, PDB, chain, resno, resid,  consensus_res, var_counts,
-                                                         var_freq, n_seq,seq_length),
-                                                by = c("PDB", "chain","resno","resid"))
-
-data_predictions_with_variability %>%
-  filter(if_any(everything(), is.na))
+alignment_results <- map.seq.to.pdb(consensus_sequence, pdb_object, alignment_method = "overlap")
+alignment_results
+as.character(alignedPattern(alignment_results))
+as.character(alignedSubject(alignment_results))
 ```
+
 
 ```{}
-data_predictions_with_variability %>% filter(PDB == "2WW8", resno == 211)
-data_variability_with_resno %>% filter(PDB == "2WW8", resno == 211)
-data_predictions %>% filter(PDB == "2WW8", resno == 211)
-data_predictions_sequencebased %>% filter(PDB == "2WW8", resno == 211)
-data_predictions_structurebased %>% filter(PDB == "2WW8", resno == 211)
+#old
+data_predictions_with_variability <- full_join(
+  data_predictions,
+  data_variability_with_resno %>%
+    filter(!is.na(resid), consensus_res.x != "-") %>%
+    mutate(resid = aa123(resid),
+           consensus_res = consensus_res.x) %>%
+    select(proteinclass, protein, PDB, resno, resid, 
+           consensus_res, position, var_counts, var_freq, n_seq,seq_length),
+  by = c("proteinclass","protein","PDB","resno","resid"))
+
+data_predictions_with_variability
 ```
+
+```{r}
+#new
+data_predictions_with_variability <- full_join(
+  data_predictions,
+  aligned_resno %>% select(-chain) %>% na.omit(),
+  by = c("proteinclass","protein","PDB","resno","resid"))
+
+data_predictions_with_variability
+```
+
+
+```{r}
+data_predictions_with_variability %>% filter(PDB == "3ZFJ") %>%
+  select(proteinclass, protein, PDB, chain, resno, resid, consensus_res, seqposno) 
+
+data_variability %>% filter(PDB == "3ZFJ")
+data_predictions_longestchain %>% filter(PDB == "3ZFJ")
+```
+
+#### do actual alignment
+maybe do this for all pdb sequences?
+```{}
+#aln_protein_names
+
+mismatch_map <- data_variability %>% select(PDB, protein) %>% filter(PDB %in% mismatch_pdb_list) %>% distinct(PDB, .keep_all = TRUE)
+
+for (pdb_entry in mismatch_map$PDB) {
+  print(pdb_entry)
+  protein_name <- mismatch_map$protein[mismatch_map$PDB == pdb_entry]
+  matched_filename <- names(aln_protein_names)[aln_protein_names == protein_name]
+  
+  aa_file <- file.path(AA_fasfiles_path, matched_filename)
+  #print(matched_file)
+  
+  aa_seqs <- RemoveGaps(readAAStringSet(aa_file)) 
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  longest_chain <- pdb_object$atom %>%
+    filter(type == "ATOM",
+           elety == "CA",
+           alt %in% c(NA, "A"),
+           resid %in% toupper(AMINO_ACID_CODE)) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%
+    filter(chain_length == max(chain_length)) %>%
+    filter(chain == min(chain)) %>%
+    pull(chain) %>%
+    unique()
+  
+  ca_atoms <- pdb_object$atom %>%
+    filter(
+      type == "ATOM",
+      elety == "CA",
+      chain == longest_chain,
+      alt %in% c(NA, "A"),
+      resid %in% toupper(AMINO_ACID_CODE)
+    )
+  
+  new_seq <- str_c(aa321(ca_atoms$resid), collapse = "")
+  
+  new_seq_set <- AAStringSet(setNames(new_seq, pdb_entry))
+  
+  combined_seqs <- c(new_seq_set, aa_seqs)
+  
+  aligned_combined <- AlignSeqs(combined_seqs, terminalGap=-1)
+  
+  aligned_new_seq <- aligned_combined[[pdb_entry]]
+}
+```
+
+##### all pdbs to same protein together
+```{}
+for (protein_name in unique(mismatch_map$protein)[4]) {
+  cat("\nProcessing protein:", protein_name, "\n")
+  
+  # Match the filename for the current protein
+  matched_filename <- names(aln_protein_names)[aln_protein_names == protein_name]
+  
+  if (length(matched_filename) == 0) {
+    warning("No matching .fas file for protein: ", protein_name)
+    next
+  }
+  
+  # Load existing alignment and remove gaps
+  aa_file <- file.path(AA_fasfiles_path, matched_filename)
+  aa_seqs <- RemoveGaps(readAAStringSet(aa_file))
+  
+  # Get PDB entries corresponding to this protein
+  pdb_entries <- mismatch_map %>% filter(protein == protein_name) %>% pull(PDB)
+  
+  # Collect all sequences from PDB entries
+  pdb_strings <- c()
+  
+  for (pdb_entry in pdb_entries) {
+    print(pdb_entry)
+    pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+    
+    longest_chain <- pdb_object$atom %>%
+      filter(type == "ATOM",
+             elety == "CA",
+             alt %in% c(NA, "A"),
+             resid %in% toupper(AMINO_ACID_CODE)) %>%
+      add_count(chain, name = "chain_length") %>%
+      arrange(desc(chain_length), chain) %>%
+      filter(chain_length == max(chain_length)) %>%
+      slice_min(chain, with_ties = FALSE) %>%
+      pull(chain)
+
+    
+    if (length(longest_chain) != 1) {
+      warning("Ambiguous chain in PDB:", pdb_entry)
+      next
+    }
+    
+    ca_atoms <- pdb_object$atom %>%
+      filter(type == "ATOM",
+             elety == "CA",
+             chain == longest_chain,
+             alt %in% c(NA, "A"),
+             resid %in% toupper(AMINO_ACID_CODE))
+    
+    new_seq <- str_c(aa321(ca_atoms$resid), collapse = "")
+    names(new_seq) <- pdb_entry
+    pdb_strings <- c(pdb_strings, new_seq)
+  }
+  
+  pdb_stringset <- AAStringSet(pdb_strings, use.names = TRUE)
+
+  # Combine and align
+  combined_seqs <- c(pdb_stringset, aa_seqs)
+  #aligned_combined <- AlignSeqs(combined_seqs,  gapOpening = -5, gapExtension = -2, terminalGap = -0.1, substitutionMatrix = "BLOSUM80")
+  aligned_combined <- AlignSeqs(combined_seqs, terminalGap = -0.1)
+  
+  # Optionally: Extract only aligned PDB entries
+  aligned_new_seqs <- aligned_combined[names(pdb_strings)]
+  
+  # Inspect or save
+  print(aligned_new_seqs)
+}
+
+```
+
+
+
+```{}
+for (pdb_entry in mismatch_pdb_list[3]) {
+  print(pdb_entry)
+  
+  tryCatch({
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  data_variability_subset <- data_variability %>% filter(PDB == pdb_entry)
+  
+  consensus_sequence <- str_c(
+    data_variability_subset %>% filter(consensus_res != "*") %>% pull(consensus_res),
+    collapse = ""
+  )
+  
+  alignment_results <- map.seq.to.pdb(consensus_sequence, pdb_object)
+  
+  ca_atoms <- pdb_object$atom %>%
+    filter(
+      type == "ATOM",
+      elety == "CA",
+      alt %in% c(NA, "A"),
+      resid %in% toupper(AMINO_ACID_CODE)
+    )
+  
+  resmap_variability <- create.resmap.variability(ca_atoms, data_variability_subset, alignment_results)
+
+  #if (is.null(data_variability_with_resno)) {
+  #  data_variability_with_resno <- resmap_variability
+  #} else {
+  #  # Otherwise, rbind the current data to the combined data frame
+  #  data_variability_with_resno <- rbind(data_variability_with_resno, resmap_variability)
+  #}
+  #
+  #}, error = function(e) {
+  #  warning("Failed on PDB entry: ", pdb_entry, "\nReason: ", e$message)
+  })
+}
+```
+
+
+
 
 
 ## plot
@@ -789,7 +983,7 @@ for (pdb_entry in na.omit(unique(data_predictions_with_variability$PDB))) {
   
   print(plot)
   
-  ggsave(filename = paste0("output/figures/variability/", pdb_entry, "_", data_subset$chain[1],
+  ggsave(filename = paste0("output/figures/variability/", pdb_entry, "_", longest_chain,
                            "_track.png"),
          plot = plot, 
          width = 14, height = 10, dpi = 300,
@@ -806,14 +1000,13 @@ data_predictions_with_variability_normalized <- data_predictions_with_variabilit
       rescale
     )
   ) %>%
-  ungroup() %>%
-  na.omit()
+  ungroup()
 
 data_predictions_with_variability_normalized
 ```
 
 ### heatmap
-```{r, fig.width=14}
+```{, fig.width=14}
 for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
   data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
   
@@ -891,15 +1084,116 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
     
     print(figure)
     
-    #ggsave(filename = paste0("output/figures/heatmap/variability/", pdb_entry, "_", chain_index, "_heatmap.png"), 
-    #       plot = figure, 
-    #       width = 14, height = 10, dpi = 300,
-    #       bg="white")
+    png(filename = paste0("output/figures/heatmap/variability/", PDB_entry, "_", chain_index, "_heatmap.png"),
+        width = 14, height = 10, units = "in", res = 300, bg = "white")
+    
+    draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+    
+    dev.off()
+
   }
 }
 ```
 
-##### clustered
+
+#### longestchain
+```{r, fig.width = 14}
+for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PDB))) {
+  print(PDB_entry)
+  
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  
+  protein_name <- unique(data_subset$protein)
+  
+  longest_chain <- data_subset %>% 
+    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+    filter(chain_length == max(chain_length)) %>%  
+    filter(chain == min(chain)) %>% 
+    pull(chain) %>%
+    unique()
+  
+  print(longest_chain)
+  data_subset_chain <- data_subset %>% filter(chain == longest_chain)
+  
+  data_subset_wide <- data_subset_chain %>%
+    select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+           `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+    #distinct() %>%
+    column_to_rownames("resno") %>%
+    as.data.frame()
+  
+  bar_data <- data_subset_wide$var_freq
+  names(bar_data) <- rownames(data_subset_wide)
+  
+  data_subset_wide <- data_subset_wide %>% select(-var_freq)
+  
+  heatmap_matrix <- t(data_subset_wide)
+  
+  top_annot <- HeatmapAnnotation(
+    `Variability` = anno_barplot(
+      bar_data, 
+      gp = gpar(fill = "gray30"), 
+      border = FALSE, 
+      bar_width = 1, 
+      ylim = c(0,1),
+      axis_param = list(
+        at = seq(0, 1, by = 0.2),
+        labels = seq(0, 1, by = 0.2)
+      )
+    ),
+    show_annotation_name = TRUE,
+    annotation_name_side = "left",
+    height = unit(4, "cm")
+  )
+  
+  residues <- as.numeric(colnames(heatmap_matrix))
+  
+  colorbar_df <- get_residueindex_colors(residues, rev = FALSE)
+  
+  annotation_df <- data.frame(NGL_Color = as.character(residues))
+  rownames(annotation_df) <- as.character(residues)
+  
+  annotation_colors <- list(
+    NGL_Color = setNames(colorbar_df$color, as.character(residues))
+  )
+  
+  bottom_annot <- HeatmapAnnotation(
+    `Residue Index` = annotation_df$NGL_Color,
+    col = list(`Residue Index` = annotation_colors$NGL_Color),
+    annotation_name_side = "right",
+    show_legend = FALSE,
+    which = "column"
+  )
+  
+  ht <- Heatmap(
+    heatmap_matrix,
+    name = "Score",
+    cluster_rows = TRUE,
+    cluster_columns = FALSE,
+    column_title = paste0(PDB_entry, " chain ", longest_chain, " (", protein_name, ")"),
+    col = colorRampPalette(c("blue", "gray95", "red"))(50),
+    top_annotation = top_annot,
+    bottom_annotation = bottom_annot,
+    show_column_names = FALSE
+  )
+  
+  figure <- draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+  
+  print(figure)
+  
+  png(filename = paste0("output/figures/heatmap/variability/", PDB_entry, "_", longest_chain, "_heatmap.png"),
+      width = 14, height = 10, units = "in", res = 300, bg = "white")
+  
+  dev.off()
+  
+  
+}
+```
+
+
+#### clustered
 ```{, fig.width=14}
 for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
   data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
@@ -1106,6 +1400,426 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)[3]) {
 
 ```
 
+#### with domain annotation
+```{r}
+library(colorspace)
+all_domain_descriptions <- data_interpro_filtered %>%
+  arrange(Description) %>%
+  pull(Description) %>%
+  unique() 
+
+#domain_palette <- qualitative_hcl(length(all_domain_descriptions), palette = "Viridis")
+domain_palette <- viridis(length(all_domain_descriptions), option="D")
+
+domain_description_colors <- setNames(
+  domain_palette, 
+  all_domain_descriptions
+  )
+
+show_col(domain_description_colors)
+
+```
+
+
+
+```{, fig.width = 14}
+for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PDB))) {
+  print(PDB_entry)
+  
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  
+  protein_name <- unique(data_subset$protein)
+  
+  longest_chain <- data_subset %>% 
+    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+    filter(chain_length == max(chain_length)) %>%  
+    filter(chain == min(chain)) %>% 
+    pull(chain) %>%
+    unique()
+  
+  print(longest_chain)
+  data_subset_chain <- data_subset %>% filter(chain == longest_chain)
+  
+  data_subset_wide <- data_subset_chain %>%
+    select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+           `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+    #distinct() %>%
+    column_to_rownames("resno") %>%
+    as.data.frame()
+  
+  bar_data <- data_subset_wide$var_freq
+  names(bar_data) <- rownames(data_subset_wide)
+  
+  data_subset_wide <- data_subset_wide %>% select(-var_freq)
+  
+  heatmap_matrix <- t(data_subset_wide)
+  
+  top_annot <- HeatmapAnnotation(
+    `Variability` = anno_barplot(
+      bar_data, 
+      gp = gpar(fill = "gray30"), 
+      border = FALSE, 
+      bar_width = 1, 
+      ylim = c(0,1),
+      axis_param = list(
+        at = seq(0, 1, by = 0.2),
+        labels = seq(0, 1, by = 0.2)
+      )
+    ),
+    show_annotation_name = TRUE,
+    annotation_name_side = "left",
+    height = unit(4, "cm")
+  )
+  
+  residues <- as.numeric(colnames(heatmap_matrix))
+  
+  colorbar_df <- get_residueindex_colors(residues, rev = FALSE)
+  
+  annotation_df <- data.frame(NGL_Color = as.character(residues))
+  rownames(annotation_df) <- as.character(residues)
+  
+  annotation_colors <- list(
+    NGL_Color = setNames(colorbar_df$color, as.character(residues))
+  )
+  
+  interpro_domains <- data_interpro_filtered %>%
+    filter(Protein_accession == PDB_entry) %>%
+    mutate(Start_resno = Start + data_subset$resno[1] - data_subset$seqposno[1],
+           End_resno = End + data_subset$resno[1] - data_subset$seqposno[1]) %>%
+    select(Start_resno, End_resno, Description) %>%
+    pmap_dfr(function(Start_resno, End_resno, Description) {
+      tibble(
+        resno = seq(Start_resno, End_resno),
+        Description = Description
+      )
+    })
+  
+  interpro_domains
+  
+  domain_vector <- rep(NA_character_, length(residues))
+  names(domain_vector) <- as.character(residues)
+  
+  matching_indices <- match(interpro_domains$resno, residues)
+  domain_vector[matching_indices[!is.na(matching_indices)]] <- interpro_domains$Description[!is.na(matching_indices)]
+  
+  bottom_annot <- HeatmapAnnotation(
+  `Residue Index` = annotation_df$NGL_Color,
+  `Domain Annotation` = domain_vector,
+  col = list(
+    `Residue Index` = annotation_colors$NGL_Color,
+    `Domain Annotation` = domain_description_colors[na.omit(unique(domain_vector))]
+  ),
+  annotation_name_side = "right",
+  show_legend = c(FALSE, TRUE),
+  na_col = "white",
+  which = "column"
+)
+
+  ht <- Heatmap(
+    heatmap_matrix,
+    name = "Score",
+    cluster_rows = TRUE,
+    cluster_columns = FALSE,
+    column_title = paste0(PDB_entry, " chain ", longest_chain, " (", protein_name, ")"),
+    col = colorRampPalette(c("blue", "gray95", "red"))(50),
+    top_annotation = top_annot,
+    bottom_annotation = bottom_annot,
+    show_column_names = FALSE
+  )
+  
+  png(filename = paste0("output/figures/heatmap/domain/", PDB_entry, "_", longest_chain, "_heatmap.png"),
+      width = 14, height = 10, units = "in", res = 300, bg = "white")
+  
+  draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+  
+  dev.off()
+  
+}
+```
+
+
+
+```{r, fig.width=14}
+for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PDB))) {
+  print(PDB_entry)
+  
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  
+  protein_name <- unique(data_subset$protein)
+  
+  longest_chain <- data_subset %>% 
+    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+    filter(chain_length == max(chain_length)) %>%  
+    filter(chain == min(chain)) %>% 
+    pull(chain) %>%
+    unique()
+  
+  print(longest_chain)
+  data_subset_chain <- data_subset %>% filter(chain == longest_chain)
+  
+  data_subset_wide <- data_subset_chain %>%
+    select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+           `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+    #distinct() %>%
+    column_to_rownames("resno") %>%
+    as.data.frame()
+  
+  bar_data <- data_subset_wide$var_freq
+  names(bar_data) <- rownames(data_subset_wide)
+  
+  data_subset_wide <- data_subset_wide %>% select(-var_freq)
+  
+  heatmap_matrix <- t(data_subset_wide)
+  
+  top_annot <- HeatmapAnnotation(
+    `Variability` = anno_barplot(
+      bar_data, 
+      gp = gpar(fill = "gray30"), 
+      border = FALSE, 
+      bar_width = 1, 
+      ylim = c(0,1),
+      axis_param = list(
+        at = seq(0, 1, by = 0.2),
+        labels = seq(0, 1, by = 0.2)
+      )
+    ),
+    show_annotation_name = TRUE,
+    annotation_name_side = "left",
+    height = unit(4, "cm")
+  )
+  
+  residues <- as.numeric(colnames(heatmap_matrix))
+  
+  colorbar_df <- get_residueindex_colors(residues, rev = FALSE)
+  
+  annotation_df <- data.frame(NGL_Color = as.character(residues))
+  rownames(annotation_df) <- as.character(residues)
+  
+  annotation_colors <- list(
+    NGL_Color = setNames(colorbar_df$color, as.character(residues))
+  )
+  
+  interpro_domains <- data_interpro_filtered %>%
+    filter(Protein_accession == PDB_entry) %>%
+    mutate(Start_resno = Start + data_subset$resno[1] - data_subset$seqposno[1],
+           End_resno = End + data_subset$resno[1] - data_subset$seqposno[1]) %>%
+    select(Start_resno, End_resno, Description) %>%
+    pmap_dfr(function(Start_resno, End_resno, Description) {
+      tibble(
+        resno = seq(Start_resno, End_resno),
+        Description = Description
+      )
+    })
+  
+  interpro_domains
+  
+  domain_vector <- rep(NA_character_, length(residues))
+  names(domain_vector) <- as.character(residues)
+  
+  matching_indices <- match(interpro_domains$resno, residues)
+  domain_vector[matching_indices[!is.na(matching_indices)]] <- interpro_domains$Description[!is.na(matching_indices)]
+  
+  # Get unique non-NA domain descriptions
+  unique_domains <- na.omit(unique(domain_vector))
+  domain_colors <- domain_description_colors[unique_domains]
+  
+  # Get blocks for each domain
+  domain_blocks <- split(names(domain_vector)[!is.na(domain_vector)], domain_vector[!is.na(domain_vector)])
+  domain_blocks_ranges <- lapply(domain_blocks, function(res_indices) {
+    indices <- which(names(domain_vector) %in% res_indices)
+    range(indices)
+  })
+  
+  # Create align_to list: each domain name maps to its residue indices (as numeric positions)
+  domain_align_to <- lapply(domain_blocks_ranges, function(rng) seq(rng[1], rng[2]))
+  
+  annotation_domain <- anno_block(
+    align_to = domain_align_to,
+    panel_fun = function(index, label) {
+      grid.rect(gp = gpar(fill = domain_colors[[label]], col = "black"))
+      block_width <- length(index)
+      # Scale font size: base 6 + 1.2 * sqrt(width), capped at 15
+      font_size <- min(1 + 1.2 * sqrt(block_width), 15)
+      grid.text(label, 0.5, 0.5, gp = gpar(col = "white", fontsize = font_size))
+    },
+    height = unit(1, "cm"), show_name = TRUE
+  )
+  
+  # Final bottom annotation with anno_block and Residue Index
+  bottom_annot <- HeatmapAnnotation(
+    `Residue Index` = annotation_df$NGL_Color,
+    `Domain hit` = annotation_domain,
+    col = list(
+      `Residue Index` = annotation_colors$NGL_Color
+    ),
+    annotation_name_side = "right",
+    show_legend = c(FALSE, FALSE),
+    na_col = "white",
+    which = "column"
+  )
+  
+  
+  ht <- Heatmap(
+    heatmap_matrix,
+    name = "Score",
+    cluster_rows = TRUE,
+    cluster_columns = FALSE,
+    column_title = paste0(PDB_entry, " chain ", longest_chain, " (", protein_name, ")"),
+    col = colorRampPalette(c("blue", "gray95", "red"))(50),
+    top_annotation = top_annot,
+    bottom_annotation = bottom_annot,
+    show_column_names = FALSE
+  )
+  
+  png(filename = paste0("output/figures/heatmap/domain/", PDB_entry, "_", longest_chain, "_heatmap.png"),
+      width = 14, height = 10, units = "in", res = 300, bg = "white")
+  
+  figure <- draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+  
+  dev.off()
+  
+  print(figure)
+}
+```
+
+FIXME: Refactor complexheatmap code
+```{,fig.width=14}
+# Helper function: get longest chain from a data subset
+get_longest_chain <- function(data_subset) {
+  data_subset %>%
+    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%
+    filter(chain_length == max(chain_length)) %>%
+    slice_min(chain) %>%
+    pull(chain) %>%
+    unique()
+}
+
+# Helper: create domain annotation vector and colors
+get_domain_annotation <- function(residues, interpro_data, resno_shift, domain_colors) {
+  domains <- interpro_data %>%
+    mutate(
+      Start_resno = Start + resno_shift,
+      End_resno = End + resno_shift
+    ) %>%
+    select(Start_resno, End_resno, Description) %>%
+    pmap_dfr(function(Start_resno, End_resno, Description) {
+      tibble(resno = seq(Start_resno, End_resno), Description = Description)
+    })
+
+
+  domain_vector <- rep(NA_character_, length(residues))
+  names(domain_vector) <- as.character(residues)
+  matching_indices <- match(domains$resno, residues)
+  domain_vector[matching_indices[!is.na(matching_indices)]] <- domains$Description[!is.na(matching_indices)]
+
+  unique_domains <- na.omit(unique(domain_vector))
+  domain_blocks <- split(names(domain_vector)[!is.na(domain_vector)], domain_vector[!is.na(domain_vector)])
+  domain_blocks_ranges <- lapply(domain_blocks, function(res_indices) {
+    indices <- which(names(domain_vector) %in% res_indices)
+    range(indices)
+  })
+  domain_align_to <- lapply(domain_blocks_ranges, function(rng) seq(rng[1], rng[2]))
+
+  annotation <- anno_block(
+    align_to = domain_align_to,
+    panel_fun = function(index, label) {
+      grid.rect(gp = gpar(fill = domain_colors[[label]], col = "black"))
+      block_width <- length(index)
+      # Scale font size: base 6 + 1.2 * sqrt(width), capped at 15
+      font_size <- min(6 + 1.2 * sqrt(block_width), 15)
+      grid.text(label, 0.5, 0.5, gp = gpar(col = "white", fontsize = font_size))
+    }
+    ,
+    height = unit(0.5, "cm")
+  )
+
+  list(annotation = annotation, domain_vector = domain_vector)
+}
+
+# Main loop
+for (pdb in na.omit(unique(data_predictions_with_variability_normalized$PDB))) {
+  message("Processing: ", pdb)
+
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == pdb)
+  protein_name <- unique(data_subset$protein)
+
+  longest_chain <- get_longest_chain(data_subset)
+  message("  Longest chain: ", longest_chain)
+
+  chain_data <- data_subset %>% filter(chain == longest_chain)
+
+  wide_data <- chain_data %>%
+    select(resno, `BepiPred-2.0 probability`, `BepiPred-3.0 score`,
+           `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+    column_to_rownames("resno")
+
+  bar_data <- wide_data$var_freq
+  wide_data <- wide_data %>% select(-var_freq)
+  heatmap_matrix <- t(as.matrix(wide_data))
+  residues <- as.numeric(colnames(heatmap_matrix))
+
+  top_annot <- HeatmapAnnotation(
+    `Variability` = anno_barplot(
+      bar_data,
+      gp = gpar(fill = "gray30"),
+      border = FALSE,
+      bar_width = 1,
+      ylim = c(0, 1),
+      axis_param = list(at = seq(0, 1, 0.2), labels = seq(0, 1, 0.2))
+    ),
+    show_annotation_name = TRUE,
+    annotation_name_side = "left",
+    height = unit(4, "cm")
+  )
+
+  colorbar_df <- get_residueindex_colors(residues, rev = FALSE)
+  annotation_colors <- list(NGL_Color = setNames(colorbar_df$color, as.character(residues)))
+  annotation_df <- data.frame(NGL_Color = as.character(residues), row.names = as.character(residues))
+
+  interpro_data <- data_interpro_filtered %>% filter(Protein_accession == pdb)
+  resno_shift <- chain_data$resno[1] - chain_data$seqposno[1]
+  domain_annot <- get_domain_annotation(residues, interpro_data, resno_shift, domain_description_colors)
+
+  bottom_annot <- HeatmapAnnotation(
+    `Residue Index` = annotation_df$NGL_Color,
+    `Domain Annotation` = domain_annot$annotation,
+    col = list(`Residue Index` = annotation_colors$NGL_Color),
+    annotation_name_side = "right",
+    show_legend = c(FALSE, FALSE),
+    na_col = "white",
+    which = "column"
+  )
+
+  ht <- Heatmap(
+    heatmap_matrix,
+    name = "Score",
+    cluster_rows = TRUE,
+    cluster_columns = FALSE,
+    column_title = paste0(pdb, " chain ", longest_chain, " (", protein_name, ")"),
+    col = colorRampPalette(c("blue", "gray95", "red"))(50),
+    top_annotation = top_annot,
+    bottom_annotation = bottom_annot,
+    show_column_names = FALSE
+  )
+
+  png(filename = paste0("output/figures/heatmap/domain/", PDB_entry, "_", longest_chain, "_heatmap.png"),
+      width = 14, height = 10, units = "in", res = 300, bg = "white")
+  
+  draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+  
+  dev.off()
+}
+
+
+```
+
+
 ## Scatterplot
 ```{r, fig.width=14,warning=FALSE}
 pivot_list <- c(
@@ -1169,7 +1883,7 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
         limit = c(0,NA)
       ) +
       labs(
-      title = paste0(PDB_entry, " chain ", data_subset$chain[1], " (",data_subset$protein[1],")"),
+      title = paste0(PDB_entry, " chain ", chain_index, " (",data_subset$protein[1],")"),
       x = "Residue variability",
       y = "Epitope prediction score"
         ) +
@@ -1292,6 +2006,182 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
            bg="white")
   }
 }
+```
+
+```{r,fig.width=14}
+pivot_list <- c(
+  "BepiPred-2.0 probability", 
+  # "RSA NetsurfP", 
+  "BepiPred-3.0 score",
+  # "BepiPred-3.0 linear epitope score", 
+  # "DiscoTope-3.0_score",
+  "DiscoTope-3.0_calibrated_score", 
+  # "RSA Shrake-Rupley", 
+  "Epigraph_score"
+)
+
+for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  protein_name <- unique(data_subset$protein)
+  
+  print(PDB_entry)
+
+  for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+
+    data_subset_long <- data_subset_chain %>%
+      select(resno, `BepiPred-2.0 probability`, `BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+      pivot_longer(cols = pivot_list, 
+                   names_to = "Score_Type", values_to = "Score_Value")
+
+    # ➤ Compute mean score per Score_Type
+    mean_df <- data_subset_long %>%
+      group_by(Score_Type) %>%
+      summarize(mean_value = mean(Score_Value, na.rm = TRUE))
+
+    # ➤ Subset again for points: only rows with non-zero variability
+    data_subset_long_nonzero_var <- data_subset_long %>% filter(var_freq > 0)
+    
+    if (nrow(data_subset_long_nonzero_var) == 0) {
+      message(paste("Skipping", PDB_entry, chain_index, "- no non-zero variability"))
+      next
+    }
+
+    plot <- ggplot(data_subset_long_nonzero_var, aes(x = var_freq, y = Score_Value)) +
+      
+      # Average horizontal line per Score_Type
+      geom_hline(
+        data = mean_df,
+        aes(yintercept = mean_value),
+        linetype = "dashed",size=1.5, color = "gray"
+      ) +
+      
+      # Linear regression line (fit on full data)
+      geom_smooth(
+        data = data_subset_long,
+        aes(group = Score_Type),
+        method = "lm",
+        se = FALSE, size = 2, color = "black"
+      ) +
+
+      scale_color_manual(
+        values = setNames(
+          c(
+            palette.colors()[7],
+            palette.colors()[6],
+            palette.colors()[4],
+            palette.colors()[8]
+          ),
+          pivot_list[1:4]
+        ),
+        name = "Score_Type"
+      ) +
+      new_scale_color() +
+      
+      # Plot only non-zero variability points
+      geom_point(aes(color = resno), size = 3) +
+      scale_color_gradientn(
+        colors = rainbow_ngl,
+        limits = c(0, max(data_subset_long$resno)),
+        name = "Residue number"
+      ) +
+      scale_x_continuous(limits = c(0, NA)) +
+      stat_regline_equation(aes(label = ..rr.label..), size = 5) +
+      facet_wrap(~Score_Type, nrow = 2) +
+
+      labs(
+        title = paste0(PDB_entry, " chain ", data_subset$chain[1], " (", data_subset$protein[1], ")"),
+        x = "Residue variability",
+        y = "Epitope prediction score"
+      ) +
+      theme_bw()
+
+    print(plot)
+
+    ggsave(filename = paste0("output/figures/scatterplot/wrapped/", PDB_entry, "_", chain_index, "_wrapped.png"), 
+           plot = plot, 
+           width = 14, height = 10, dpi = 300,
+           bg = "white")
+  }
+}
+
+```
+
+### violin
+```{r, fig.width=14, warning=FALSE}
+pivot_list <- c(
+  "BepiPred-2.0 probability", 
+  "BepiPred-3.0 score",
+  "DiscoTope-3.0_calibrated_score", 
+  "Epigraph_score"
+)
+
+for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  protein_name <- unique(data_subset$protein)
+  
+  print(PDB_entry)
+  
+  longest_chain <- data_subset %>% 
+    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+    filter(chain_length == max(chain_length)) %>%  
+    filter(chain == min(chain)) %>% 
+    pull(chain) %>%
+    unique()
+
+  for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+
+    # Prepare data
+    data_subset_long_violin <- data_subset_chain %>%
+      select(resno, all_of(pivot_list), var_freq) %>%
+      pivot_longer(cols = pivot_list, names_to = "Score_Type", values_to = "Score_Value") %>%
+      mutate(
+        Variability_Group = ifelse(var_freq > 0, "Variable", "No variability")
+      )
+
+    # Skip if only one group exists
+    if (length(unique(data_subset_long_violin$Variability_Group)) < 2) {
+      message(paste("Skipping", PDB_entry, chain_index, "- only one variability group"))
+      next
+    }
+
+    plot_violin <- ggplot(data_subset_long_violin, aes(x = Variability_Group, y = Score_Value, fill = Variability_Group)) +
+      geom_violin(trim = FALSE, scale = "width", alpha = 0.6) +
+      geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.8) +
+      stat_compare_means(
+        method = "wilcox.test",
+        label = "p.signif",
+        comparisons = list(c("No variability", "Variable")),
+        hide.ns = TRUE
+      ) +
+      facet_wrap(~ Score_Type, nrow = 2) +
+      scale_fill_manual(values = c("No variability" = "#999999", "Variable" = "#E69F00")) +
+      labs(
+        title = paste0(PDB_entry, " chain ", chain_index, " (", protein_name, ")"),
+        x = "Residue variability",
+        y = "Epitope prediction score"
+      ) +
+      theme_bw() +
+      theme(legend.position = "none")
+
+    print(plot_violin)
+
+    ggsave(
+      filename = paste0("output/figures/violin/", PDB_entry, "_", chain_index, "_violin.png"),
+      plot = plot_violin,
+      width = 14, height = 10, dpi = 300, bg = "white"
+    )
+  }
+}
+
+
+
 ```
 
 

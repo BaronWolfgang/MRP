@@ -12,30 +12,44 @@ read.pdb.custom <- function(pdb_entry, pdb_path = NULL) {
   
   pdb_object <- NULL  # Default return value
   
+  # Try reading local PDB file
   if (file.exists(pdb_file)) {
     pdb_object <- tryCatch({
       read.pdb(file = pdb_file, rm.alt = FALSE)
     }, error = function(e) {
-      message("Error reading file: ", pdb_file, " - Trying to load PDB entry, ", pdb_entry, ", from web.")
+      message("Error reading local PDB file: ", pdb_file)
       return(NULL)  
     })
-  } 
+  }
   
-  if (is.null(pdb_object)) {  # If local file fails, attempt to fetch from the web
+  # Try reading from web if local fails
+  if (is.null(pdb_object)) {
     pdb_object <- tryCatch({
       read.pdb(pdb_entry, rm.alt = FALSE)
     }, error = function(e) {
-      message("Error reading PDB entry: ", pdb_entry, "- Failed to load from web, returning NULL")
+      message("Error reading PDB entry from web: ", pdb_entry)
       return(NULL)
     })
   }
   
+  # Retry web load if pdbseq is missing
   if (!is.null(pdb_object) && is.null(pdbseq(pdb_object))) {
-    print(paste("Missing pdbseq:", pdb_entry, "- Retrying to load from web using PDB entry:", pdb_entry))
+    message("Missing pdbseq for ", pdb_entry, " - Retrying from web")
     pdb_object <- tryCatch({
       read.pdb(pdb_entry, rm.alt = FALSE)
     }, error = function(e) {
-      message("Retry failed for PDB entry: ", pdb_entry, "- Returning NULL")
+      message("Retry failed for PDB entry: ", pdb_entry)
+      return(NULL)
+    })
+  }
+  
+  # Try reading CIF if all PDB attempts fail
+  if (is.null(pdb_object)) {
+    message("Attempting to fetch and parse mmCIF for ", pdb_entry)
+    pdb_object <- tryCatch({
+      read.cif(pdb_entry)  # You need this function implemented already
+    }, error = function(e) {
+      message("Failed to read CIF for ", pdb_entry)
       return(NULL)
     })
   }

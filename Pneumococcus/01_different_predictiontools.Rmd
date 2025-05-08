@@ -45,7 +45,8 @@ https://services.healthtech.dtu.dk/services/BepiPred-2.0/
 ```{r}
 data_BepiPred_2 <- rbind(
     read_csv("output/BepiPred2.0/BepiPred_part1_summary_67C1B456000FBFBBD072AA59.csv"),
-    read_csv("output/BepiPred2.0/BepiPred_part2_summary_67C1B4C8000FC0D59FA5D3FB.csv")
+    read_csv("output/BepiPred2.0/BepiPred_part2_summary_67C1B4C8000FC0D59FA5D3FB.csv"),
+    read_csv("output/BepiPred2.0/BepiPred_part3_summary_681B08A3001AD0BAAA45311C.csv")
     ) 
 ```
 
@@ -99,14 +100,10 @@ write.csv(data_BepiPred_2_with_resno,
 https://services.healthtech.dtu.dk/services/BepiPred-3.0/
 
 ```{r}
-read_csv
-```
-
-
-```{r}
 data_BepiPred_3 <- rbind(
     read_csv("output/BepiPred3.0/raw_output_part1_0228.csv"),
-    read_csv("output/BepiPred3.0/raw_output_part2_0228.csv")
+    read_csv("output/BepiPred3.0/raw_output_part2_0228.csv"),
+    read_csv("output/BepiPred3.0/raw_output_part3.csv")
     ) %>%
   #mutate(Residue = aa123(Residue)) %>%
   group_by(Accession) %>%
@@ -140,11 +137,6 @@ for (pdb_entry in pdb_files_list) {
 data_BepiPred_3_with_resno
 ```
 
-```{r}
-data_BepiPred_3_with_resno %>% filter(Accession == "2WWD")
-```
-
-
 ## Store results as csv
 ```{r}
 write.csv(data_BepiPred_3_with_resno,
@@ -162,8 +154,14 @@ data_DiscoTope <- NULL
 for (csv_file in csv_files) {
   print(csv_file)
   
-  temp_data <- read_csv(csv_file, show_col_types = FALSE) 
+  pdb_id <- str_extract(basename(csv_file), "^[^_]+") 
   
+  temp_data <- read_csv(csv_file, show_col_types = FALSE)
+  
+  temp_data <- temp_data %>%
+    mutate(pdb = pdb_id,
+           resno = res_id)
+
   if (is.null(data_DiscoTope)) {
     data_DiscoTope <- temp_data
   } else {
@@ -171,16 +169,12 @@ for (csv_file in csv_files) {
   }
 }
 
-data_DiscoTope <- data_DiscoTope %>%
-  mutate(pdb = gsub("_.*", "", pdb),
-         resno = res_id)
-
 data_DiscoTope
 ```
 
-
-
-
+```{r}
+data_DiscoTope %>% pull(pdb) %>% unique()
+```
 ## Store results as csv
 ```{r}
 write.csv(data_DiscoTope,
@@ -222,6 +216,11 @@ data_Epigraph <- data_Epigraph %>%
 
 data_Epigraph
 ```
+
+```{r}
+data_Epigraph %>% pull(PDB) %>% unique()
+```
+
 
 ```{r}
 data_Epigraph_subset <- data_Epigraph %>% filter(PDB == "2BIB")
@@ -352,3 +351,417 @@ for (pdb_entry in unique(data_GraphBepi$PDB)) {
 
 data_GraphBepi_with_resno
 ```
+
+# InterPro
+https://www.ebi.ac.uk/interpro/search/sequence/
+InterPro gives domain/topology prediction of proteins
+```{r}
+interpro_files <- list.files(path = "output/InterPro/", pattern = "\\.tsv$", full.names = TRUE)
+
+interpro_files
+
+interpro_colnames <- c(
+  "Protein_accession", "MD5", "Sequence_length", "Analysis",
+  "Signature_accession", "Signature_description", "Start", "End",
+  "Score", "Status", "Date", "InterPro_accession", "InterPro_description",
+  "GO_annotations", "Pathways"
+)
+
+interpro_coltypes <- cols(
+  Protein_accession = col_character(),
+  MD5 = col_character(),
+  Sequence_length = col_integer(),
+  Analysis = col_character(),
+  Signature_accession = col_character(),
+  Signature_description = col_character(),
+  Start = col_integer(),
+  End = col_integer(),
+  Score = col_double(),  
+  Status = col_logical(),
+  Date = col_date(format = "%d-%m-%Y"),
+  InterPro_accession = col_character(),
+  InterPro_description = col_character(),
+  GO_annotations = col_character(),
+  Pathways = col_character()
+)
+
+# Load the file with correct column types and headers
+data_interpro <- read_tsv(
+  interpro_files,
+  col_names = interpro_colnames,
+  col_types = interpro_coltypes
+) %>%
+  setNames(interpro_colnames)
+```
+
+```{r}
+data_interpro %>% filter(Protein_accession == "4QQQ") %>%
+  select(Analysis, Signature_description, InterPro_accession, Start, End, Score) %>%
+  arrange(-log10(Score))
+```
+
+```{r}
+data_interpro %>% 
+  #filter(!(Signature_description == "-" & InterPro_description == "-")) %>% 
+  pull(Analysis) %>%
+  table() %>%
+  as.data.frame() %>%
+  arrange(desc(Freq))
+
+data_interpro %>% 
+  filter(!(Signature_description == "-" & InterPro_description == "-")) %>% 
+  pull(Analysis) %>%
+  table() %>%
+  as.data.frame() %>%
+  arrange(desc(Freq))
+```
+
+```{r}
+data_interpro %>%
+  filter(Analysis != "-") %>%  # Exclude empty entries
+  mutate(present = TRUE) %>%   # Mark presence explicitly
+  distinct(Protein_accession, Analysis, present, Score) %>%  # Avoid duplicates
+  pivot_wider(names_from = Analysis, values_from = Score, values_fill = NA)
+```
+
+
+
+```{r, fig.width=14}
+data_interpro %>%
+  filter(Protein_accession == "2BIB") %>%
+  mutate(id = row_number()) %>%
+  ggplot() +
+  geom_segment(
+    aes(
+      x = Start, xend = End,
+      y = Signature_description, yend = Signature_description,
+      color = InterPro_description,
+    ),
+    size=8
+  ) +
+  theme_bw() +
+  labs(
+    x = "Amino acid position",
+    y = "Signature description"
+  )
+
+data_interpro %>%
+  filter(Protein_accession == "2BIB") %>%
+  mutate(id = row_number()) %>%
+  ggplot() +
+  geom_segment(
+    aes(
+      x = Start, xend = End,
+      y = InterPro_description, yend = InterPro_description,
+      color = Signature_description,
+    ),
+    size=8
+  ) +
+  theme_bw() +
+  labs(
+    x = "Amino acid position",
+    y = "InterPro description"
+  )
+
+data_interpro %>%
+  filter(Protein_accession == "2BIB") %>%
+  mutate(id = row_number()) %>%
+  ggplot() +
+  geom_segment(
+    aes(
+      x = Start, xend = End,
+      y = Analysis, yend = Analysis,
+      color = Signature_description,
+    ),
+    size=8
+  ) +
+  theme_bw() +
+  labs(
+    x = "Amino acid position",
+    y = "Analysis method"
+  )
+
+data_interpro %>%
+  filter(Protein_accession == "2BIB") %>%
+  mutate(id = row_number()) %>%
+  ggplot() +
+  geom_segment(
+    aes(
+      x = Start, xend = End,
+      y = Analysis, yend = Analysis,
+      color = InterPro_description,
+    ),
+    size=8
+  ) +
+  theme_bw() +
+  labs(
+    x = "Amino acid position",
+    y = "Analysis method"
+  )
+
+data_interpro %>%
+  filter(Protein_accession == "2BIB") %>%
+  mutate(id = row_number(),
+         Score = as.numeric(Score)) %>%
+  ggplot() +
+  geom_segment(
+    aes(
+      x = Start, xend = End,
+      y = -log10(Score), yend = -log10(Score),
+      color = interaction(Analysis,InterPro_description),
+    ),
+    size=8
+  ) +
+  theme_bw() +
+  labs(
+    x = "Amino acid position",
+    y = "Significance"
+  )
+```
+
+```{r, fig.width=14}
+data_interpro %>%
+  filter(Analysis == "SUPERFAMILY") %>%
+  arrange(Protein_accession) %>%
+  ggplot() +
+  geom_segment(
+    aes(
+      x = Start, xend = End,
+      y = Protein_accession, yend = Protein_accession,
+      color = Signature_description,
+    ),
+    size=4
+  ) +
+  theme_bw() +
+  labs(
+    x = "Amino acid position",
+    y = "Analysis method"
+  )
+
+data_interpro %>%
+  arrange(Protein_accession) %>%
+  ggplot() +
+  geom_segment(
+    aes(
+      x = Start, xend = End,
+      y = Protein_accession, yend = Protein_accession,
+      color = InterPro_description,
+    ),
+    size=4
+  ) +
+  theme_bw() +
+  labs(
+    x = "Amino acid position",
+    y = "Analysis method"
+  )
+```
+
+```{r fig.width=14}
+for (protein in sort(unique(data_interpro$Protein_accession))) {
+  print(protein)
+  
+  data_interpro_subset <- data_interpro %>%
+    filter(Protein_accession == protein) %>%
+    pivot_longer(
+      cols = c(Signature_description, InterPro_description),
+      names_to = "Description_type",
+      values_to = "Description"
+    )
+  
+  plot <- data_interpro_subset %>%
+  ggplot() +
+  geom_segment(
+    aes(
+      x = Start, xend = End,
+      y = Analysis, yend = Analysis,
+      color = Description,
+    ),
+    size=8
+  ) +
+  facet_wrap(~ Description_type) +
+  theme_bw() +
+  labs(
+    title = paste0("Domains in ", protein),
+    x = "Amino acid position",
+    y = "Analysis method"
+  )
+  
+  print(plot)
+}
+```
+
+```{r, fig.width=14}
+for (protein in sort(unique(data_interpro$Protein_accession))) {
+  
+  data_interpro_subset <- data_interpro %>%
+    filter(Protein_accession == protein) %>%
+    pivot_longer(
+      cols = c(Signature_description, InterPro_description),
+      names_to = "Description_type",
+      values_to = "Description"
+    ) %>%
+    filter(!is.na(Description) & Description != "-") %>%
+    mutate(
+      combination = interaction(Description_type, Analysis)
+    )
+
+  # Use numeric y_pos for small vertical shifts
+  plot <- ggplot(data_interpro_subset) +
+    geom_segment(
+      aes(x = Start, xend = End,
+          y = -log10(Score), yend = -log10(Score),
+          group = combination,
+          color = Description),
+      size = 5
+    ) +
+    #scale_y_continuous(
+    #  breaks = unique(as.numeric(factor(data_interpro_subset$Analysis))),
+    #  labels = levels(factor(data_interpro_subset$Analysis))
+    #) +
+    labs(
+      title = paste0("Protein: ", protein),
+      x = "Amino acid position",
+      y = "E-value"
+    ) +
+    theme_minimal() 
+
+  print(plot)
+}
+```
+
+```{r, fig.width=14, warning=FALSE}
+for (protein in sort(unique(data_interpro$Protein_accession))) {
+  print(protein)
+  
+  data_interpro_subset <- data_interpro %>%
+    filter(Protein_accession == protein,
+           !is.na(Score)) %>%
+    mutate(e_value = -log10(Score),
+           Description = case_when(
+             InterPro_description != "-" ~ InterPro_description,
+             TRUE ~ Signature_description
+             )
+           ) %>%
+    # Calculate the max e_value for each Analysis group and reorder Analysis factor
+    group_by(Analysis) %>%
+    mutate(max_e_value = max(e_value, na.rm = TRUE)) %>%
+    ungroup() %>%
+    mutate(Analysis = factor(Analysis, levels = unique(Analysis[order(max_e_value)]))) %>%
+    select(-max_e_value)  # Remove max_e_value column
+  
+  plot <- data_interpro_subset %>%
+    filter(!is.na(Description) & Description != "-") %>%
+    ggplot() +
+    geom_segment(
+      aes(
+        x = Start, xend = End,
+        y = Analysis, yend = Analysis,
+        color = Description,
+        alpha = e_value
+      ),
+      size = 8
+    ) +
+    scale_alpha_continuous() +
+    theme_bw() +
+    labs(
+      title = paste0("Domains in ", protein),
+      x = "Amino acid position",
+      y = "Analysis"
+    )
+  
+  print(plot)
+}
+
+```
+
+
+## cleaned
+We want to build up annotation, using the most significant (based on E-value) non-overlapping domain hits
+
+```{r}
+data_interpro %>%
+  #filter(Protein_accession == "2BIB") %>%
+  group_by(Protein_accession) %>%
+  mutate(Description = case_when(
+             InterPro_description != "-" ~ InterPro_description,
+             !is.na(InterPro_description) ~ InterPro_description,
+             TRUE ~ Signature_description
+             )
+         ) %>%
+  ungroup() %>%
+  filter(!is.na(Description), Description != "-") %>%
+  arrange(Protein_accession, Score, Description) 
+```
+
+```{r}
+keep_non_overlapping <- function(df) {
+  df <- df %>%
+    filter(!is.na(Score),
+           Score != 0) %>%
+    mutate(e_value = -log10(Score)) %>%
+    arrange(desc(e_value))  # Most significant first
+  
+  kept <- list()
+  occupied_ranges <- IRanges::IRanges()  # Efficient range management
+  
+  for (i in seq_len(nrow(df))) {
+    this_range <- IRanges::IRanges(start = df$Start[i], end = df$End[i])
+    
+    # Check for overlap with any previously kept range
+    if (length(occupied_ranges) == 0 || length(IRanges::findOverlaps(this_range, occupied_ranges)) == 0) {
+      occupied_ranges <- c(occupied_ranges, this_range)
+      kept[[length(kept) + 1]] <- df[i, ]
+    }
+  }
+  
+  bind_rows(kept)
+}
+```
+
+```{r}
+data_interpro %>%
+  filter(Protein_accession == "2BIB",
+         !is.na(Score)) %>%
+  mutate(e_value = -log10(Score)) %>%
+  arrange(desc(e_value))
+```
+
+
+```{r}
+filtered_hits <- data_interpro %>%
+  filter(Protein_accession == "3E0M") %>%
+  group_by(Protein_accession) %>%
+  mutate(Description = case_when(
+             InterPro_description != "-" ~ InterPro_description,
+             !is.na(InterPro_description) ~ InterPro_description,
+             TRUE ~ Signature_description
+             )
+         ) %>%
+  ungroup() %>%
+  filter(!is.na(Description), Description != "-") %>%
+  arrange(Protein_accession, Score, Description) %>%
+  group_by(Protein_accession) %>%
+  group_modify(~keep_non_overlapping(.x)) %>%
+  ungroup()
+
+filtered_hits
+```
+
+```{r}
+data_interpro_filtered <- data_interpro %>%
+  group_by(Protein_accession) %>%
+  mutate(Description = case_when(
+             InterPro_description == "-" ~ Signature_description,
+             is.na(InterPro_description) ~ Signature_description,
+             TRUE ~ InterPro_description
+             )
+         ) %>%
+  filter(!is.na(Description), Description != "-") %>%
+  arrange(Protein_accession, Score) %>%
+  group_modify(~ keep_non_overlapping(.x)) %>%
+  select(Protein_accession, Sequence_length, Analysis, )
+  ungroup()
+
+data_interpro_filtered
+```
+
