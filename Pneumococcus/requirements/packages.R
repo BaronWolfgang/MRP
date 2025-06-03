@@ -1,4 +1,4 @@
-data_management_packages_to_install <- c("data.table", "tidyverse" ,"readxl","purrr","readr","scales","msa","jsonlite")
+data_management_packages_to_install <- c("data.table", "tidyverse" ,"readxl","purrr","readr","scales","msa","jsonlite", "broom")
 data_visualisation_packages_to_install <- c("ggplot2","cowplot","pheatmap","viridisLite","ggseqlogo","circlize","ggpubr", "ggnewscale")
 structural_packages_to_install <- c("bio3d","NGLVieweR", "htmlwidgets","htmltools")
 

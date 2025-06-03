@@ -101,7 +101,7 @@ create.resmap <- function(pdb_atom_df, epitope_prediction_df,required_adjustment
            elety == "CA",
            alt %in% c(NA, "A"),
            resid %in% toupper(AMINO_ACID_CODE)) %>%
-    select(resid,resno,chain) %>%
+    #select(resid,resno,chain,x,y,z,o,b) %>%
     full_join(epitope_prediction_df %>%
                 mutate(resno = Position + required_adjustment),
               by = join_by

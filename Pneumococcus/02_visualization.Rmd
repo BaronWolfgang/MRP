@@ -33,20 +33,21 @@ data_DiscoTope <- read.csv("output/DiscoTope/data_DiscoTope.csv", check.names = 
 ```{r}
 data_predictions_sequencebased <- full_join(
   data_BepiPred_2_with_resno %>%
-    mutate(PDB = Entry,
+    mutate(
            `BepiPred-2.0 probability` = EpitopeProbability,
-           `RSA NetsurfP` = RelativeSurfaceAccessilibity) %>%
-    select(PDB, chain, resno,resid,`BepiPred-2.0 probability`,`RSA NetsurfP`) %>%
+           `RSA NetsurfP` = RelativeSurfaceAccessilibity
+           ) %>%
+    select(proteinclass,protein,TIGR4_name,PDB, chain, resno,resid,`BepiPred-2.0 probability`,`RSA NetsurfP`,x,y,z) %>%
     filter(resid %in% toupper(AMINO_ACID_CODE))
   ,
   
   data_BepiPred_3_with_resno %>%
-    mutate(PDB = Accession,
-           seqposno = Position) %>%
-    select(PDB, chain, resno, seqposno, resid, `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`) %>%
+    select(
+      proteinclass,protein,TIGR4_name,PDB, chain, resno, resid, `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`,x,y,z
+      ) %>%
     filter(resid %in% toupper(AMINO_ACID_CODE))
   ,
-  by = c("PDB","chain","resno","resid")
+  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid","x","y","z")
 )
 
 data_predictions_sequencebased
@@ -59,18 +60,21 @@ data_predictions_sequencebased %>%
 ```{r}
 data_predictions_structurebased <- full_join(
   data_Epigraph %>%
-    mutate(Epigraph_score = Score) %>%
-    select(PDB, chain, resno, resid, Epigraph_score)
+    mutate(
+      Epigraph_score = Score
+      ) %>%
+    select(proteinclass,protein,TIGR4_name,PDB, chain, resno, resid, Epigraph_score, RSA)
   ,
   data_DiscoTope %>%
-    mutate(PDB = pdb,
-           resid = aa123(residue),
+    mutate(
            `RSA Shrake-Rupley` = rsa,
            `DiscoTope-3.0_calibrated_score` = calibrated_score
     ) %>%
-    select(PDB, chain, resno, resid, `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, `RSA Shrake-Rupley`)
+    select(
+      proteinclass,protein,TIGR4_name,PDB, chain, resno, resid, `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, `RSA Shrake-Rupley`
+      )
   , 
-  by = c("PDB","resno","chain","resid")
+  by = c("proteinclass","protein","TIGR4_name","PDB","resno","chain","resid")
 )
 data_predictions_structurebased
 
@@ -86,14 +90,10 @@ data_predictions_structurebased <- data_predictions_structurebased #%>%
 
 
 ```{r}
-data_predictions_structurebased %>% filter(PDB == "2BIB")
-```
-
-```{r}
 data_predictions <- full_join(
   data_predictions_sequencebased,
   data_predictions_structurebased,
-  by = c("PDB", "chain", "resno","resid")
+  by = c("proteinclass","protein","TIGR4_name","PDB","chain", "resno","resid")
   )
 
 data_predictions %>%
@@ -105,34 +105,7 @@ data_predictions %>%
 data_predictions
 ```
 
-### get the protein names 
-names are not consistent between the structural and protein panel data, so they have to be cleaned
-```{r}
-data_namesclasspdb <- data_structural %>%
-  separate_rows(`PDB entry`, sep = ", ") %>%
-  mutate(PDB = `PDB entry`,
-         structure_proteinname = `Proteins (TIGR4) name`,
-         structure_proteinname_clean = ifelse(
-           grepl("^SP_", gsub(" ", "", gsub("\\(.*", "", `Proteins (TIGR4) name`))), 
-           sub("^(SP_\\d{4}).*", "\\1", gsub(" ", "", gsub("\\(.*", "", `Proteins (TIGR4) name`))),
-           sub("_.*", "", gsub(" ", "", gsub("\\(.*", "", `Proteins (TIGR4) name`)))
-         )
-  ) %>%
-  select(structure_proteinname_clean, PDB) %>%
-  full_join(
-    data_proteinpanel %>% 
-      mutate(panel_proteinname = `Proteins (TIGR4)`,
-             panel_proteinname_clean = gsub(" ","",gsub("\\(.*", "", panel_proteinname)),
-             proteinclass = `Protein class`
-      ) %>%
-      select(proteinclass, panel_proteinname_clean), keep = TRUE,
-    by = c("structure_proteinname_clean" = "panel_proteinname_clean")
-  ) %>%
-  mutate(protein = structure_proteinname_clean) %>%
-  select(proteinclass, protein, PDB)
 
-data_namesclasspdb
-```
 
 
 ```{r}
@@ -147,7 +120,7 @@ data_predictions
 ## normalize
 ```{r}
 data_predictions_normalized <- data_predictions %>%
-  group_by(PDB, chain) %>%
+  group_by(protein,PDB, chain) %>%
   mutate(
     across(
       c(#`BepiPred-2.0 probability`,
@@ -626,110 +599,11 @@ setdiff(
 )
 ```
 
-## msa pdbseq with protein
 ```{r}
-
-```
-
-FIXME: Currently we filter out all consensus_res with character "-", but it might be better to just align the pdb sequence to the variability profile
-
-## match consensus seq to pdbseq
-```{}
-data_variability_with_resno <- NULL
-
-for (pdb_entry in na.omit(unique(data_variability$PDB))) {
-  print(pdb_entry)
-  
-  tryCatch({
-  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
-  
-  data_variability_subset <- data_variability %>% filter(PDB == pdb_entry)
-  
-  consensus_sequence <- str_c(
-    data_variability_subset %>% filter(consensus_res != "*") %>% pull(consensus_res),
-    collapse = ""
-  )
-  
-  alignment_results <- map.seq.to.pdb(consensus_sequence, pdb_object)
-  
-  ca_atoms <- pdb_object$atom %>%
-    filter(
-      type == "ATOM",
-      elety == "CA",
-      alt %in% c(NA, "A"),
-      resid %in% toupper(AMINO_ACID_CODE)
-    )
-  
-  resmap_variability <- create.resmap.variability(ca_atoms, data_variability_subset, alignment_results)
-
-  if (is.null(data_variability_with_resno)) {
-    data_variability_with_resno <- resmap_variability
-  } else {
-    # Otherwise, rbind the current data to the combined data frame
-    data_variability_with_resno <- rbind(data_variability_with_resno, resmap_variability)
-  }
-  
-  }, error = function(e) {
-    warning("Failed on PDB entry: ", pdb_entry, "\nReason: ", e$message)
-  })
-}
-
-data_variability_with_resno 
-#data_variability_with_resno %>%
-#  #select(PDB,resno,resid, consensus_res,var_counts,var_freq,n_seq,seq_length) %>%
-#  filter(if_any(everything(), is.na))
-```
-
-```{, test}
-for (pdb_entry in unique(data_predictions$PDB)[2]) {
-  print(pdb_entry)
-  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
-  
-  data_variability_subset <- data_variability %>% filter(PDB == pdb_entry, consensus_res != "*") %>% 
-    mutate(Position = position) %>% select(!position)
-  
-  consensus_sequence <- data_variability_subset %>%
-    pull(consensus_res) %>% 
-    str_c(collapse = "")
-  
-  required_adjustment <- map.seqposno.to.resno(sequence_AA1 = consensus_sequence, 
-                                               pdb_object = pdb_object,
-                                               verbose = TRUE)
-}
-```
-
-```{}
-data_variability_subset
-consensus_sequence
-
-alignment_results <- map.seq.to.pdb(consensus_sequence, pdb_object, alignment_method = "overlap")
-alignment_results
-as.character(alignedPattern(alignment_results))
-as.character(alignedSubject(alignment_results))
-```
-
-
-```{}
-#old
 data_predictions_with_variability <- full_join(
-  data_predictions,
-  data_variability_with_resno %>%
-    filter(!is.na(resid), consensus_res.x != "-") %>%
-    mutate(resid = aa123(resid),
-           consensus_res = consensus_res.x) %>%
-    select(proteinclass, protein, PDB, resno, resid, 
-           consensus_res, position, var_counts, var_freq, n_seq,seq_length),
-  by = c("proteinclass","protein","PDB","resno","resid"))
-
-data_predictions_with_variability
-```
-
-```{r}
-#new
-data_predictions_with_variability <- full_join(
-  data_predictions,
-  aligned_resno %>% select(-chain) %>% na.omit(),
-  by = c("proteinclass","protein","PDB","resno","resid"))
+  data_predictions_longestchain,
+  data_variability %>% select(-chain) %>% na.omit(),
+  by = c("proteinclass","protein","PDB","resno","resid", "x", "y", "z"))
 
 data_predictions_with_variability
 ```
@@ -743,178 +617,24 @@ data_variability %>% filter(PDB == "3ZFJ")
 data_predictions_longestchain %>% filter(PDB == "3ZFJ")
 ```
 
-#### do actual alignment
-maybe do this for all pdb sequences?
-```{}
-#aln_protein_names
-
-mismatch_map <- data_variability %>% select(PDB, protein) %>% filter(PDB %in% mismatch_pdb_list) %>% distinct(PDB, .keep_all = TRUE)
-
-for (pdb_entry in mismatch_map$PDB) {
-  print(pdb_entry)
-  protein_name <- mismatch_map$protein[mismatch_map$PDB == pdb_entry]
-  matched_filename <- names(aln_protein_names)[aln_protein_names == protein_name]
-  
-  aa_file <- file.path(AA_fasfiles_path, matched_filename)
-  #print(matched_file)
-  
-  aa_seqs <- RemoveGaps(readAAStringSet(aa_file)) 
-  
-  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
-  
-  longest_chain <- pdb_object$atom %>%
-    filter(type == "ATOM",
-           elety == "CA",
-           alt %in% c(NA, "A"),
-           resid %in% toupper(AMINO_ACID_CODE)) %>%
-    add_count(chain, name = "chain_length") %>%
-    arrange(desc(chain_length), chain) %>%
-    filter(chain_length == max(chain_length)) %>%
-    filter(chain == min(chain)) %>%
-    pull(chain) %>%
-    unique()
-  
-  ca_atoms <- pdb_object$atom %>%
-    filter(
-      type == "ATOM",
-      elety == "CA",
-      chain == longest_chain,
-      alt %in% c(NA, "A"),
-      resid %in% toupper(AMINO_ACID_CODE)
+### normalized
+```{r}
+data_predictions_with_variability_normalized <- data_predictions_with_variability %>%
+  group_by(PDB) %>%
+  mutate(
+    across(
+      c(`BepiPred-3.0 score` , `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, Epigraph_score), 
+      rescale
     )
-  
-  new_seq <- str_c(aa321(ca_atoms$resid), collapse = "")
-  
-  new_seq_set <- AAStringSet(setNames(new_seq, pdb_entry))
-  
-  combined_seqs <- c(new_seq_set, aa_seqs)
-  
-  aligned_combined <- AlignSeqs(combined_seqs, terminalGap=-1)
-  
-  aligned_new_seq <- aligned_combined[[pdb_entry]]
-}
+  ) %>%
+  ungroup()
+
+data_predictions_with_variability_normalized
 ```
-
-##### all pdbs to same protein together
-```{}
-for (protein_name in unique(mismatch_map$protein)[4]) {
-  cat("\nProcessing protein:", protein_name, "\n")
-  
-  # Match the filename for the current protein
-  matched_filename <- names(aln_protein_names)[aln_protein_names == protein_name]
-  
-  if (length(matched_filename) == 0) {
-    warning("No matching .fas file for protein: ", protein_name)
-    next
-  }
-  
-  # Load existing alignment and remove gaps
-  aa_file <- file.path(AA_fasfiles_path, matched_filename)
-  aa_seqs <- RemoveGaps(readAAStringSet(aa_file))
-  
-  # Get PDB entries corresponding to this protein
-  pdb_entries <- mismatch_map %>% filter(protein == protein_name) %>% pull(PDB)
-  
-  # Collect all sequences from PDB entries
-  pdb_strings <- c()
-  
-  for (pdb_entry in pdb_entries) {
-    print(pdb_entry)
-    pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
-    
-    longest_chain <- pdb_object$atom %>%
-      filter(type == "ATOM",
-             elety == "CA",
-             alt %in% c(NA, "A"),
-             resid %in% toupper(AMINO_ACID_CODE)) %>%
-      add_count(chain, name = "chain_length") %>%
-      arrange(desc(chain_length), chain) %>%
-      filter(chain_length == max(chain_length)) %>%
-      slice_min(chain, with_ties = FALSE) %>%
-      pull(chain)
-
-    
-    if (length(longest_chain) != 1) {
-      warning("Ambiguous chain in PDB:", pdb_entry)
-      next
-    }
-    
-    ca_atoms <- pdb_object$atom %>%
-      filter(type == "ATOM",
-             elety == "CA",
-             chain == longest_chain,
-             alt %in% c(NA, "A"),
-             resid %in% toupper(AMINO_ACID_CODE))
-    
-    new_seq <- str_c(aa321(ca_atoms$resid), collapse = "")
-    names(new_seq) <- pdb_entry
-    pdb_strings <- c(pdb_strings, new_seq)
-  }
-  
-  pdb_stringset <- AAStringSet(pdb_strings, use.names = TRUE)
-
-  # Combine and align
-  combined_seqs <- c(pdb_stringset, aa_seqs)
-  #aligned_combined <- AlignSeqs(combined_seqs,  gapOpening = -5, gapExtension = -2, terminalGap = -0.1, substitutionMatrix = "BLOSUM80")
-  aligned_combined <- AlignSeqs(combined_seqs, terminalGap = -0.1)
-  
-  # Optionally: Extract only aligned PDB entries
-  aligned_new_seqs <- aligned_combined[names(pdb_strings)]
-  
-  # Inspect or save
-  print(aligned_new_seqs)
-}
-
-```
-
-
-
-```{}
-for (pdb_entry in mismatch_pdb_list[3]) {
-  print(pdb_entry)
-  
-  tryCatch({
-  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
-  
-  data_variability_subset <- data_variability %>% filter(PDB == pdb_entry)
-  
-  consensus_sequence <- str_c(
-    data_variability_subset %>% filter(consensus_res != "*") %>% pull(consensus_res),
-    collapse = ""
-  )
-  
-  alignment_results <- map.seq.to.pdb(consensus_sequence, pdb_object)
-  
-  ca_atoms <- pdb_object$atom %>%
-    filter(
-      type == "ATOM",
-      elety == "CA",
-      alt %in% c(NA, "A"),
-      resid %in% toupper(AMINO_ACID_CODE)
-    )
-  
-  resmap_variability <- create.resmap.variability(ca_atoms, data_variability_subset, alignment_results)
-
-  #if (is.null(data_variability_with_resno)) {
-  #  data_variability_with_resno <- resmap_variability
-  #} else {
-  #  # Otherwise, rbind the current data to the combined data frame
-  #  data_variability_with_resno <- rbind(data_variability_with_resno, resmap_variability)
-  #}
-  #
-  #}, error = function(e) {
-  #  warning("Failed on PDB entry: ", pdb_entry, "\nReason: ", e$message)
-  })
-}
-```
-
-
-
-
 
 ## plot
 ### tracks
-```{r,warning=FALSE, fig.width = 14}
+```{,warning=FALSE, fig.width = 14}
 pivot_list <- c(
   "BepiPred-2.0 probability", 
   # "RSA NetsurfP", 
@@ -991,19 +711,7 @@ for (pdb_entry in na.omit(unique(data_predictions_with_variability$PDB))) {
 }
 ```
 
-```{r}
-data_predictions_with_variability_normalized <- data_predictions_with_variability %>%
-  group_by(PDB) %>%
-  mutate(
-    across(
-      c(`BepiPred-3.0 score` , `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, Epigraph_score), 
-      rescale
-    )
-  ) %>%
-  ungroup()
 
-data_predictions_with_variability_normalized
-```
 
 ### heatmap
 ```{, fig.width=14}
@@ -1420,127 +1128,6 @@ show_col(domain_description_colors)
 
 ```
 
-
-
-```{, fig.width = 14}
-for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PDB))) {
-  print(PDB_entry)
-  
-  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
-  
-  protein_name <- unique(data_subset$protein)
-  
-  longest_chain <- data_subset %>% 
-    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
-    add_count(chain, name = "chain_length") %>%
-    arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
-    filter(chain_length == max(chain_length)) %>%  
-    filter(chain == min(chain)) %>% 
-    pull(chain) %>%
-    unique()
-  
-  print(longest_chain)
-  data_subset_chain <- data_subset %>% filter(chain == longest_chain)
-  
-  data_subset_wide <- data_subset_chain %>%
-    select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
-           `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
-    #distinct() %>%
-    column_to_rownames("resno") %>%
-    as.data.frame()
-  
-  bar_data <- data_subset_wide$var_freq
-  names(bar_data) <- rownames(data_subset_wide)
-  
-  data_subset_wide <- data_subset_wide %>% select(-var_freq)
-  
-  heatmap_matrix <- t(data_subset_wide)
-  
-  top_annot <- HeatmapAnnotation(
-    `Variability` = anno_barplot(
-      bar_data, 
-      gp = gpar(fill = "gray30"), 
-      border = FALSE, 
-      bar_width = 1, 
-      ylim = c(0,1),
-      axis_param = list(
-        at = seq(0, 1, by = 0.2),
-        labels = seq(0, 1, by = 0.2)
-      )
-    ),
-    show_annotation_name = TRUE,
-    annotation_name_side = "left",
-    height = unit(4, "cm")
-  )
-  
-  residues <- as.numeric(colnames(heatmap_matrix))
-  
-  colorbar_df <- get_residueindex_colors(residues, rev = FALSE)
-  
-  annotation_df <- data.frame(NGL_Color = as.character(residues))
-  rownames(annotation_df) <- as.character(residues)
-  
-  annotation_colors <- list(
-    NGL_Color = setNames(colorbar_df$color, as.character(residues))
-  )
-  
-  interpro_domains <- data_interpro_filtered %>%
-    filter(Protein_accession == PDB_entry) %>%
-    mutate(Start_resno = Start + data_subset$resno[1] - data_subset$seqposno[1],
-           End_resno = End + data_subset$resno[1] - data_subset$seqposno[1]) %>%
-    select(Start_resno, End_resno, Description) %>%
-    pmap_dfr(function(Start_resno, End_resno, Description) {
-      tibble(
-        resno = seq(Start_resno, End_resno),
-        Description = Description
-      )
-    })
-  
-  interpro_domains
-  
-  domain_vector <- rep(NA_character_, length(residues))
-  names(domain_vector) <- as.character(residues)
-  
-  matching_indices <- match(interpro_domains$resno, residues)
-  domain_vector[matching_indices[!is.na(matching_indices)]] <- interpro_domains$Description[!is.na(matching_indices)]
-  
-  bottom_annot <- HeatmapAnnotation(
-  `Residue Index` = annotation_df$NGL_Color,
-  `Domain Annotation` = domain_vector,
-  col = list(
-    `Residue Index` = annotation_colors$NGL_Color,
-    `Domain Annotation` = domain_description_colors[na.omit(unique(domain_vector))]
-  ),
-  annotation_name_side = "right",
-  show_legend = c(FALSE, TRUE),
-  na_col = "white",
-  which = "column"
-)
-
-  ht <- Heatmap(
-    heatmap_matrix,
-    name = "Score",
-    cluster_rows = TRUE,
-    cluster_columns = FALSE,
-    column_title = paste0(PDB_entry, " chain ", longest_chain, " (", protein_name, ")"),
-    col = colorRampPalette(c("blue", "gray95", "red"))(50),
-    top_annotation = top_annot,
-    bottom_annotation = bottom_annot,
-    show_column_names = FALSE
-  )
-  
-  png(filename = paste0("output/figures/heatmap/domain/", PDB_entry, "_", longest_chain, "_heatmap.png"),
-      width = 14, height = 10, units = "in", res = 300, bg = "white")
-  
-  draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
-  
-  dev.off()
-  
-}
-```
-
-
-
 ```{r, fig.width=14}
 for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PDB))) {
   print(PDB_entry)
@@ -1603,6 +1190,15 @@ for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PD
     NGL_Color = setNames(colorbar_df$color, as.character(residues))
   )
   
+  rsa_vector <- data_subset_chain %>%
+    filter(resno %in% residues) %>%
+    arrange(match(resno, residues)) %>%
+    pull(`RSA Shrake-Rupley`)
+  
+  names(rsa_vector) <- as.character(residues)
+  
+  rsa_colors <- circlize::colorRamp2(c(0, 1), c("#E69F00", "#56B4E9"))
+  
   interpro_domains <- data_interpro_filtered %>%
     filter(Protein_accession == PDB_entry) %>%
     mutate(Start_resno = Start + data_subset$resno[1] - data_subset$seqposno[1],
@@ -1652,12 +1248,14 @@ for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PD
   # Final bottom annotation with anno_block and Residue Index
   bottom_annot <- HeatmapAnnotation(
     `Residue Index` = annotation_df$NGL_Color,
+    `RSA` = rsa_vector,
     `Domain hit` = annotation_domain,
     col = list(
-      `Residue Index` = annotation_colors$NGL_Color
+      `Residue Index` = annotation_colors$NGL_Color,
+      `RSA` = rsa_colors
     ),
     annotation_name_side = "right",
-    show_legend = c(FALSE, FALSE),
+    show_legend = c(FALSE, TRUE, FALSE),
     na_col = "white",
     which = "column"
   )
@@ -1821,7 +1419,7 @@ for (pdb in na.omit(unique(data_predictions_with_variability_normalized$PDB))) {
 
 
 ## Scatterplot
-```{r, fig.width=14,warning=FALSE}
+```{, fig.width=14,warning=FALSE}
 pivot_list <- c(
   "BepiPred-2.0 probability", 
   # "RSA NetsurfP", 
@@ -1914,7 +1512,7 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
 }
 ```
 
-```{r, fig.width=14, warning=FALSE}
+```{, fig.width=14, warning=FALSE}
 pivot_list <- c(
   "BepiPred-2.0 probability", 
   # "RSA NetsurfP", 
@@ -2020,6 +1618,8 @@ pivot_list <- c(
   "Epigraph_score"
 )
 
+min_freq <- 0.01
+
 for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
   data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
   protein_name <- unique(data_subset$protein)
@@ -2036,13 +1636,11 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
       pivot_longer(cols = pivot_list, 
                    names_to = "Score_Type", values_to = "Score_Value")
 
-    # ➤ Compute mean score per Score_Type
     mean_df <- data_subset_long %>%
       group_by(Score_Type) %>%
       summarize(mean_value = mean(Score_Value, na.rm = TRUE))
 
-    # ➤ Subset again for points: only rows with non-zero variability
-    data_subset_long_nonzero_var <- data_subset_long %>% filter(var_freq > 0)
+    data_subset_long_nonzero_var <- data_subset_long %>% filter(var_freq > min_freq)
     
     if (nrow(data_subset_long_nonzero_var) == 0) {
       message(paste("Skipping", PDB_entry, chain_index, "- no non-zero variability"))
@@ -2058,9 +1656,143 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
         linetype = "dashed",size=1.5, color = "gray"
       ) +
       
+      geom_vline(
+        xintercept = min_freq,
+        linetype = "dashed",size=1.5, color = "gray"
+      ) +
+      
       # Linear regression line (fit on full data)
       geom_smooth(
-        data = data_subset_long,
+        data = data_subset_long_nonzero_var,
+        aes(group = Score_Type),
+        method = "lm",
+        se = FALSE, size = 2, color = "black"
+      ) +
+
+      scale_color_manual(
+        values = setNames(
+          c(
+            palette.colors()[7],
+            palette.colors()[6],
+            palette.colors()[4],
+            palette.colors()[8]
+          ),
+          pivot_list[1:4]
+        ),
+        name = "Score_Type"
+      ) +
+      new_scale_color() +
+      
+      stat_regline_equation(data = data_subset_long_nonzero_var, aes(label = ..rr.label..), size = 5) +
+      facet_wrap(~Score_Type, nrow = 2) +
+      
+      geom_point(data = data_subset_long,aes(color = resno), size = 3) +
+      scale_color_gradientn(
+        colors = rainbow_ngl,
+        limits = c(0, max(data_subset_long$resno)),
+        name = "Residue number"
+      ) +
+      scale_x_continuous(limits = c(0, NA)) +
+
+      labs(
+        title = paste0(PDB_entry, " chain ", data_subset$chain[1], " (", data_subset$protein[1], ")"),
+        x = "Residue variability",
+        y = "Epitope prediction score"
+      ) +
+      theme_bw()
+
+    print(plot)
+
+    ggsave(filename = paste0("output/figures/scatterplot/wrapped/", PDB_entry, "_", chain_index, "_wrapped.png"), 
+           plot = plot, 
+           width = 14, height = 10, dpi = 300,
+           bg = "white")
+  }
+}
+
+```
+
+#### vardist
+```{r,fig.width=14}
+pivot_list <- c(
+  "BepiPred-2.0 probability", 
+  # "RSA NetsurfP", 
+  "BepiPred-3.0 score",
+  # "BepiPred-3.0 linear epitope score", 
+  # "DiscoTope-3.0_score",
+  "DiscoTope-3.0_calibrated_score", 
+  # "RSA Shrake-Rupley", 
+  "Epigraph_score"
+)
+
+for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  protein_name <- unique(data_subset$protein)
+  
+  print(PDB_entry)
+
+  for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    # Identify variable residues
+    var_residues <- data_subset_chain %>% filter(var_freq > 0)
+    
+    if (nrow(var_residues) < 1) {
+      message(paste("Skipping", PDB_entry, chain_index, "- no variable residues"))
+      next
+    }
+    
+    # Initialize distance column to Inf
+    data_subset_chain <- data_subset_chain %>%
+      mutate(min_distance_to_var = Inf,
+             closest_var_freq = NA_real_)
+    
+    # Loop through each variable residue and update the minimum distance
+    for (i in 1:nrow(var_residues)) {
+      x_var <- var_residues$x[i]
+      y_var <- var_residues$y[i]
+      z_var <- var_residues$z[i]
+      freq_var <- var_residues$var_freq[i]
+      
+      # Calculate distance from this variable residue to all residues
+      distances <- sqrt((data_subset_chain$x - x_var)^2 +
+                          (data_subset_chain$y - y_var)^2 +
+                          (data_subset_chain$z - z_var)^2)
+      
+      # Find which distances are smaller than current min
+      closer <- distances < data_subset_chain$min_distance_to_var
+      
+      # Update only where the new distance is shorter
+      data_subset_chain$min_distance_to_var[closer] <- distances[closer]
+      data_subset_chain$closest_var_freq[closer] <- freq_var
+    }
+    
+    data_subset_long <- data_subset_chain %>%
+      select(resno, `BepiPred-2.0 probability`, `BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq, min_distance_to_var, closest_var_freq) %>%
+      pivot_longer(cols = pivot_list, 
+                   names_to = "Score_Type", values_to = "Score_Value")
+    
+    
+    data_subset_long_nonzero_dist <- data_subset_long %>% filter(min_distance_to_var > 0)
+    
+    mean_df <- data_subset_long %>%
+      group_by(Score_Type) %>%
+      summarize(mean_value = mean(Score_Value, na.rm = TRUE))
+    
+    plot <- data_subset_long %>% 
+      ggplot(aes(x = min_distance_to_var, y = Score_Value)) +
+      
+      geom_hline(
+        data = mean_df,
+        aes(yintercept = mean_value),
+        linetype = "dashed",size=1.5, color = "gray"
+      ) +
+      
+      # Linear regression line (fit on full data)
+      geom_smooth(
+        data = data_subset_long_nonzero_dist,
         aes(group = Score_Type),
         method = "lm",
         se = FALSE, size = 2, color = "black"
@@ -2081,35 +1813,323 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
       new_scale_color() +
       
       # Plot only non-zero variability points
-      geom_point(aes(color = resno), size = 3) +
+      geom_point(aes(color = resno, size = closest_var_freq), alpha = 0.5) +
       scale_color_gradientn(
         colors = rainbow_ngl,
         limits = c(0, max(data_subset_long$resno)),
         name = "Residue number"
       ) +
+      scale_size_continuous(limits = c(0, NA),
+                            name = "Variability closest variable residue") +
       scale_x_continuous(limits = c(0, NA)) +
       stat_regline_equation(aes(label = ..rr.label..), size = 5) +
       facet_wrap(~Score_Type, nrow = 2) +
 
       labs(
         title = paste0(PDB_entry, " chain ", data_subset$chain[1], " (", data_subset$protein[1], ")"),
-        x = "Residue variability",
+        x = "CA distance to closest variable residue (A)",
         y = "Epitope prediction score"
       ) +
       theme_bw()
 
     print(plot)
-
-    ggsave(filename = paste0("output/figures/scatterplot/wrapped/", PDB_entry, "_", chain_index, "_wrapped.png"), 
+    
+    ggsave(filename = paste0("output/figures/scatterplot/wrapped/vardist/", PDB_entry, "_", chain_index, "_wrapped.png"), 
            plot = plot, 
            width = 14, height = 10, dpi = 300,
            bg = "white")
+
   }
 }
 
 ```
 
-### violin
+#### freqdist
+```{r,fig.width=14}
+min_var_freq = 0.05
+#max_distance_to_var = 10
+
+pivot_list <- c(
+  "BepiPred-2.0 probability", 
+  # "RSA NetsurfP", 
+  "BepiPred-3.0 score",
+  # "BepiPred-3.0 linear epitope score", 
+  # "DiscoTope-3.0_score",
+  "DiscoTope-3.0_calibrated_score", 
+  # "RSA Shrake-Rupley", 
+  "Epigraph_score"
+)
+
+for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  protein_name <- unique(data_subset$protein)
+  
+  print(PDB_entry)
+
+  for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    # Identify variable residues
+    var_residues <- data_subset_chain %>% filter(var_freq > min_var_freq)
+    
+    if (nrow(var_residues) < 1) {
+      message(paste("Skipping", PDB_entry, chain_index, "- no variable residues"))
+      next
+    }
+    
+    # Initialize distance column to Inf
+    data_subset_chain <- data_subset_chain %>%
+      mutate(min_distance_to_var = Inf,
+             closest_var_freq = NA_real_)
+    
+    # Loop through each variable residue and update the minimum distance
+    for (i in 1:nrow(var_residues)) {
+      x_var <- var_residues$x[i]
+      y_var <- var_residues$y[i]
+      z_var <- var_residues$z[i]
+      freq_var <- var_residues$var_freq[i]
+      
+      # Calculate distance from this variable residue to all residues
+      distances <- sqrt((data_subset_chain$x - x_var)^2 +
+                          (data_subset_chain$y - y_var)^2 +
+                          (data_subset_chain$z - z_var)^2)
+      
+      # Find which distances are smaller than current min
+      closer <- distances < data_subset_chain$min_distance_to_var
+      
+      # Update only where the new distance is shorter
+      data_subset_chain$min_distance_to_var[closer] <- distances[closer]
+      data_subset_chain$closest_var_freq[closer] <- freq_var
+    }
+    
+    data_subset_long <- data_subset_chain %>%
+      select(resno, `BepiPred-2.0 probability`, `BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq, min_distance_to_var, closest_var_freq) %>%
+      pivot_longer(cols = pivot_list, 
+                   names_to = "Score_Type", values_to = "Score_Value")
+    
+    
+    data_subset_long_nonzero_dist <- data_subset_long %>% filter(min_distance_to_var > 0)
+    
+    mean_df <- data_subset_long %>%
+      group_by(Score_Type) %>%
+      summarize(mean_value = mean(Score_Value, na.rm = TRUE))
+    
+    plot <- data_subset_long %>% 
+      ggplot(aes(x = closest_var_freq, y = Score_Value)) +
+      
+      geom_hline(
+        data = mean_df,
+        aes(yintercept = mean_value),
+        linetype = "dashed",size=1.5, color = "gray"
+      ) +
+      
+      # Linear regression line (fit on full data)
+      geom_smooth(
+        data = data_subset_long_nonzero_dist,
+        aes(group = Score_Type),
+        method = "lm",
+        se = FALSE, size = 2, color = "black"
+      ) +
+
+      scale_color_manual(
+        values = setNames(
+          c(
+            palette.colors()[7],
+            palette.colors()[6],
+            palette.colors()[4],
+            palette.colors()[8]
+          ),
+          pivot_list[1:4]
+        ),
+        name = "Score_Type"
+      ) +
+      new_scale_color() +
+      
+      # Plot only non-zero variability points
+      geom_point(aes(color = resno, size = -min_distance_to_var), alpha = 0.5) +
+      scale_color_gradientn(
+        colors = rainbow_ngl,
+        limits = c(0, max(data_subset_long$resno)),
+        name = "Residue number"
+      ) +
+      scale_x_continuous(limits = c(0, NA)) +
+      scale_size_continuous(limits = c(-10, -3.8),
+                            breaks = c(-10, -8, -6, -4, -3.8),
+                            labels = c("10+", "8", "6", "4", "3.8"),
+                            name = "Distance to variable residue (Å)") +
+      stat_regline_equation(aes(label = ..rr.label..), size = 5) +
+      facet_wrap(~Score_Type, nrow = 2) +
+
+      labs(
+        title = paste0(PDB_entry, " chain ", data_subset$chain[1], " (", data_subset$protein[1], ")"),
+        x = "Variability of closest variable residue",
+        y = "Epitope prediction score"
+      ) +
+      theme_bw()
+
+    print(plot)
+    
+    ggsave(filename = paste0("output/figures/scatterplot/wrapped/freqdist/", PDB_entry, "_", chain_index, "_wrapped.png"), 
+           plot = plot, 
+           width = 14, height = 10, dpi = 300,
+           bg = "white")
+
+  }
+}
+
+```
+
+```{r,fig.width=14}
+min_var_freq = 0.05
+max_distance_to_var = 10
+min_RSA = 0.2
+
+pivot_list <- c(
+  "BepiPred-2.0 probability", 
+  # "RSA NetsurfP", 
+  "BepiPred-3.0 score",
+  # "BepiPred-3.0 linear epitope score", 
+  # "DiscoTope-3.0_score",
+  "DiscoTope-3.0_calibrated_score", 
+  # "RSA Shrake-Rupley", 
+  "Epigraph_score"
+)
+
+for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  protein_name <- unique(data_subset$protein)
+  
+  print(PDB_entry)
+
+  for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    # Identify variable residues
+    var_residues <- data_subset_chain %>% filter(var_freq > min_var_freq)
+    
+    if (nrow(var_residues) < 1) {
+      message(paste("Skipping", PDB_entry, chain_index, "- no variable residues"))
+      next
+    }
+    
+    # Initialize distance column to Inf
+    data_subset_chain <- data_subset_chain %>%
+      mutate(min_distance_to_var = Inf,
+             closest_var_freq = NA_real_)
+    
+    # Loop through each variable residue and update the minimum distance
+    for (i in 1:nrow(var_residues)) {
+      x_var <- var_residues$x[i]
+      y_var <- var_residues$y[i]
+      z_var <- var_residues$z[i]
+      freq_var <- var_residues$var_freq[i]
+      
+      # Calculate distance from this variable residue to all residues
+      distances <- sqrt((data_subset_chain$x - x_var)^2 +
+                          (data_subset_chain$y - y_var)^2 +
+                          (data_subset_chain$z - z_var)^2)
+      
+      # Find which distances are smaller than current min
+      closer <- distances < data_subset_chain$min_distance_to_var
+      
+      # Update only where the new distance is shorter
+      data_subset_chain$min_distance_to_var[closer] <- distances[closer]
+      data_subset_chain$closest_var_freq[closer] <- freq_var
+    }
+    
+    data_subset_long <- data_subset_chain %>%
+      mutate(
+        min_distance_to_var = case_when(
+          min_distance_to_var == Inf ~ NA,
+          TRUE ~ min_distance_to_var
+        )
+        ) %>%
+      select(resno, `BepiPred-2.0 probability`, `BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq, min_distance_to_var, closest_var_freq, RSA) %>%
+      pivot_longer(cols = pivot_list, 
+                   names_to = "Score_Type", values_to = "Score_Value")
+    
+    
+    data_subset_long_nonzero_dist <- data_subset_long %>% 
+      filter(closest_var_freq > min_var_freq,
+             min_distance_to_var < max_distance_to_var,
+             RSA > min_RSA)
+    
+    mean_df <- data_subset_long %>%
+      filter(RSA > min_RSA) %>%
+      group_by(Score_Type) %>%
+      summarize(mean_value = mean(Score_Value, na.rm = TRUE))
+    
+    plot <- data_subset_long %>% 
+      ggplot(aes(x = closest_var_freq, y = Score_Value)) +
+      
+      geom_hline(
+        data = mean_df,
+        aes(yintercept = mean_value),
+        linetype = "dashed",size=1.5, color = "gray"
+      ) +
+      
+      # Linear regression line (fit on full data)
+      geom_smooth(
+        data = data_subset_long_nonzero_dist,
+        aes(group = Score_Type),
+        method = "lm",
+        se = FALSE, size = 2, color = "black"
+      ) +
+
+      scale_color_manual(
+        values = setNames(
+          c(
+            palette.colors()[7],
+            palette.colors()[6],
+            palette.colors()[4],
+            palette.colors()[8]
+          ),
+          pivot_list[1:4]
+        ),
+        name = "Score_Type"
+      ) +
+      new_scale_color() +
+      
+      # Plot only non-zero variability points
+      geom_point(aes(color = resno, size = RSA), alpha = 0.5) +
+      scale_color_gradientn(
+        colors = rainbow_ngl,
+        limits = c(0, max(data_subset_long$resno)),
+        name = "Residue number"
+      ) +
+      scale_x_continuous(limits = c(0, NA)) +
+      #scale_size_continuous(limits = c(-10, -3.8),
+      #                      breaks = c(-10, -8, -6, -4, -3.8),
+      #                      labels = c("10+", "8", "6", "4", "3.8"),
+      #                      name = "Distance to variable residue (Å)") +
+      stat_regline_equation(aes(label = ..rr.label..), size = 5) +
+      facet_wrap(~Score_Type, nrow = 2) +
+
+      labs(
+        title = paste0(PDB_entry, " chain ", data_subset$chain[1], " (", data_subset$protein[1], ")"),
+        x = "Variability of closest variable residue",
+        y = "Epitope prediction score"
+      ) +
+      theme_bw()
+
+    print(plot)
+    
+    #ggsave(filename = paste0("output/figures/scatterplot/wrapped/freqdist/", PDB_entry, "_", chain_index, "_wrapped.png"), 
+    #       plot = plot, 
+    #       width = 14, height = 10, dpi = 300,
+    #       bg = "white")
+
+  }
+}
+
+```
+
+
+## violin
 ```{r, fig.width=14, warning=FALSE}
 pivot_list <- c(
   "BepiPred-2.0 probability", 
@@ -2117,6 +2137,8 @@ pivot_list <- c(
   "DiscoTope-3.0_calibrated_score", 
   "Epigraph_score"
 )
+
+min_freq <- 0.01
 
 for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
   data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
@@ -2142,7 +2164,7 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
       select(resno, all_of(pivot_list), var_freq) %>%
       pivot_longer(cols = pivot_list, names_to = "Score_Type", values_to = "Score_Value") %>%
       mutate(
-        Variability_Group = ifelse(var_freq > 0, "Variable", "No variability")
+        Variability_Group = ifelse(var_freq > min_freq, "Variable", "Not variable")
       )
 
     # Skip if only one group exists
@@ -2157,11 +2179,11 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
       stat_compare_means(
         method = "wilcox.test",
         label = "p.signif",
-        comparisons = list(c("No variability", "Variable")),
+        comparisons = list(c("Not variable", "Variable")),
         hide.ns = TRUE
       ) +
       facet_wrap(~ Score_Type, nrow = 2) +
-      scale_fill_manual(values = c("No variability" = "#999999", "Variable" = "#E69F00")) +
+      scale_fill_manual(values = c("Not variable" = "#999999", "Variable" = "#E69F00")) +
       labs(
         title = paste0(PDB_entry, " chain ", chain_index, " (", protein_name, ")"),
         x = "Residue variability",
@@ -2184,5 +2206,1045 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
 
 ```
 
+### within 10A
+```{r}
+pivot_list <- c(
+  "BepiPred-2.0 probability", 
+  "BepiPred-3.0 score",
+  "DiscoTope-3.0_calibrated_score", 
+  "Epigraph_score"
+)
 
+```
+
+```{r, fig.width=14}
+# Loop through each unique PDB entry
+for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  protein_name <- unique(data_subset$protein)
+  
+  print(PDB_entry)
+  
+  # Determine the longest chain
+  longest_chain <- data_subset %>% 
+    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%
+    filter(chain_length == max(chain_length)) %>%  
+    filter(chain == min(chain)) %>% 
+    pull(chain) %>%
+    unique()
+  
+  # Loop through each chain
+  for (chain_index in unique(data_subset$chain)) {
+    print(chain_index)
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    # Identify residues with var_freq > 0
+    var_residues <- data_subset_chain %>% filter(var_freq > 0)
+    
+    if (nrow(var_residues) < 1) {
+      message(paste("Skipping", PDB_entry, chain_index, "- no variable residues"))
+      next
+    }
+    
+    # Initialize distance column to Inf
+    data_subset_chain <- data_subset_chain %>%
+      mutate(min_distance_to_var = Inf,
+             closest_var_freq = NA_real_)
+    
+    # Loop through each variable residue and update the minimum distance
+    for (i in 1:nrow(var_residues)) {
+      x_var <- var_residues$x[i]
+      y_var <- var_residues$y[i]
+      z_var <- var_residues$z[i]
+      freq_var <- var_residues$var_freq[i]
+      
+      # Calculate distance from this variable residue to all residues
+      distances <- sqrt((data_subset_chain$x - x_var)^2 +
+                          (data_subset_chain$y - y_var)^2 +
+                          (data_subset_chain$z - z_var)^2)
+      
+      # Find which distances are smaller than current min
+      closer <- distances < data_subset_chain$min_distance_to_var
+      
+      # Update only where the new distance is shorter
+      data_subset_chain$min_distance_to_var[closer] <- distances[closer]
+      data_subset_chain$closest_var_freq[closer] <- freq_var
+    }
+    
+    data_subset_long_violin <- data_subset_chain %>%
+      select(resno, all_of(pivot_list), var_freq, min_distance_to_var) %>%
+      pivot_longer(cols = pivot_list, names_to = "Score_Type", values_to = "Score_Value") %>%
+      mutate(
+        Near_Var_Group = ifelse(min_distance_to_var <= 10, "Near variable", "Not near variable")
+      )
+    
+    plot_violin <- ggplot(data_subset_long_violin, aes(x = Near_Var_Group, y = Score_Value, fill = Near_Var_Group)) +
+      geom_violin(trim = FALSE, scale = "width", alpha = 0.6) +
+      geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.8) +
+      stat_compare_means(
+        method = "wilcox.test",
+        label = "p.signif",
+        comparisons = list(c("Not near variable", "Near variable")),
+        hide.ns = TRUE
+      ) +
+      facet_wrap(~ Score_Type, nrow = 2) +
+      scale_fill_manual(values = c("Not near variable" = "#999999", "Near variable" = "#E69F00")) +
+      labs(
+        title = paste0(PDB_entry, " chain ", chain_index, " (", protein_name, ")"),
+        x = "Residue proximity to variable position (<10 CA euclidean distance)",
+        y = "Epitope prediction score"
+      ) +
+      theme_bw() +
+      theme(legend.position = "none")
+    
+    print(plot_violin)
+    
+    ggsave(
+      filename = paste0("output/figures/violin/vardist/", PDB_entry, "_", chain_index, "_violin.png"),
+      plot = plot_violin,
+      width = 14, height = 10, dpi = 300, bg = "white"
+    )
+  }
+}
+```
+
+
+## summary statistics
+### score vs var
+```{r, fig.width=14}
+library(ggrepel)
+
+data_predictions_with_variability_normalized %>%
+  pivot_longer(cols = pivot_list, 
+               names_to = "Score_Type", values_to = "Score_Value") %>%
+  group_by(proteinclass, PDB, Score_Type) %>%
+  summarize(
+    mean_score = mean(Score_Value),
+    mean_variability = mean(var_freq),
+    n_seq = mean(n_seq),
+    seq_length = mean(seq_length)
+  ) %>%
+  mutate(
+    mean_variability = case_when(
+      is.na(mean_variability) ~ 0,
+      TRUE ~ mean_variability
+    ),
+    mean_score = case_when(
+      is.na(mean_score) ~ 0,
+      TRUE ~ mean_score
+    )
+  ) %>%
+  ggplot(aes(x=mean_variability, y=mean_score)) +
+  geom_point(aes(col = proteinclass, alpha = n_seq/seq_length)) +
+  #geom_text_repel(aes(label = PDB, col = proteinclass, alpha = n_seq/seq_length), min.segment.length = 0.01, max.overlaps = 100) +
+  scale_alpha_continuous(limits = c(0,NA)) +
+  theme_bw() +
+  facet_wrap(~Score_Type)
+```
+
+### residue only
+#### regression
+```{r}
+regression_results_all <- data_predictions_with_variability_normalized %>%
+  select(PDB,resno, all_of(pivot_list), var_freq) %>%
+  pivot_longer(cols = pivot_list, 
+                   names_to = "Score_Type", values_to = "Score_Value") %>%
+  group_by(PDB, Score_Type) %>%
+  na.omit() %>%
+  group_modify(~ {
+    model <- lm(Score_Value ~ var_freq, data = .x, na.action = "na.exclude")
+    tidy(model) %>% mutate(
+      r.squared = summary(model)$r.squared
+    ) 
+  }) #%>%
+  #ungroup()
+
+regression_results_all
+```
+
+
+```{r, fig.width = 14}
+regression_results_all %>%
+  #group_by(PDB, Score_Type, term) %>%
+  ggplot(aes(x = Score_Type, y = r.squared)) +
+  geom_violin(aes(fill = Score_Type),trim = FALSE, scale = "width", alpha = 0.6) +
+  geom_line(aes(group = interaction(PDB, term)), color = "gray70", alpha = 0.5) +
+  geom_boxplot(width = 0.1) +
+  geom_point(
+    aes(alpha = -log10(p.value) + 1)
+    ) +
+  theme_bw() +
+  labs(
+    x = "Prediction method",
+    y = "R-squared",
+    title = "Regression (epitope prediction score ~ variability)"
+  )
+
+regression_results_all %>%
+  group_by(PDB, Score_Type, term) %>%
+  mutate(log1p_p.value = -log10(p.value) + 1) %>%
+  ggplot(aes(x = Score_Type, y = log1p_p.value)) +
+  geom_violin(aes(fill = Score_Type),trim = FALSE, scale = "width", alpha = 0.6) +
+  geom_line(aes(group = interaction(PDB, term)), color = "gray70", alpha = 0.5) +
+  geom_boxplot(width = 0.1) +
+  geom_point(
+    aes(alpha = r.squared, col = term)
+    ) +
+  theme_bw() +
+  labs(
+    x = "Prediction method",
+    y = "p-value",
+    title = "Regression (epitope prediction score ~ variability)"
+  ) +
+  facet_wrap(~term, scales = "free_y", ncol = 1)
+
+```
+
+#### binary classification
+```{r}
+class_results_residue <- data_predictions_with_variability_normalized %>%
+  select(proteinclass,protein,PDB,resno, all_of(pivot_list), var_freq) %>%
+  pivot_longer(cols = pivot_list, 
+               names_to = "Score_Type", values_to = "Score_Value") %>%
+  group_by(PDB, Score_Type) %>%
+  mutate(
+    var_class_00 = case_when(
+      is.na(var_freq) ~ NA_character_,
+      var_freq <= 0 ~ "not variable",
+      TRUE ~ "variable"
+    ),
+    var_class_05 = case_when(
+      is.na(var_freq) ~ NA_character_,
+      var_freq <= 0.05 ~ "not variable",
+      TRUE ~ "variable"
+    )
+  ) %>%
+  pivot_longer(
+    cols = c(var_class_00, var_class_05),
+    names_to = "var_class_type",
+    values_to = "var_class"
+  ) %>%
+  ungroup() %>%
+  #drop_na(Score_Value, var_class) %>%
+  group_by(PDB, Score_Type, var_class_type) #%>%
+  #nest() %>%
+  #mutate(
+  #  valid = map_lgl(data, ~ {
+  #    vc <- .x$var_class
+  #    g_sizes <- table(vc)
+  #    length(g_sizes) == 2 && all(g_sizes >= 2)
+  #  }),
+
+  #  t_test = map2(data, valid, ~ if (.y) t.test(Score_Value ~ var_class, data = .x) else NULL),
+
+  #  tidy_res = map(t_test, ~ if (!is.null(.x)) tidy(.x) else NULL)
+  #) %>%
+  #unnest(tidy_res)
+
+class_results_residue
+```
+
+```{r, fig.width=14}
+class_results_residue %>%
+  drop_na()%>%
+  ggplot(aes(x= Score_Type, fill = var_class, y = Score_Value)) +
+  geom_violin(
+    aes(fill = var_class),
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
+  ) +
+  geom_boxplot(
+    aes(fill = var_class),
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
+  ) +
+  #geom_point(position = position_dodge(width = 0.8)) +
+  stat_compare_means(
+    aes(group = var_class),
+    method = "wilcox",
+    label = "p.signif",
+    hide.ns = TRUE
+  ) +
+  labs(
+    x = "Prediction method",
+    y = "Score value",
+    title = "Not variable vs variable (wilcox.test)"
+  ) +
+  facet_wrap(~ var_class_type, nrow = 2) +
+  scale_fill_manual(values = c("not variable" = "#999999", "variable" = "#E69F00")) +
+  theme_bw()
+```
+
+
+
+
+
+```{r}
+class_results_residue_means <- class_results_residue %>%
+  group_by(PDB,protein,proteinclass, Score_Type, var_class_type) %>%
+  drop_na() %>%
+  group_modify(function(.x, .y) {
+    data_do <- .x
+    
+    # Ensure var_class has exactly 2 levels
+    if (n_distinct(data_do$var_class) != 2) {
+      return(tibble())
+    }
+    
+    # Ensure both groups have at least 2 observations
+    counts <- table(data_do$var_class)
+    if (any(counts < 2)) {
+      return(tibble())
+    }
+
+    # Run t-test
+    test <- t.test(Score_Value ~ var_class, data = data_do)
+    tidy_out <- tidy(test)
+
+    # Rename group means using actual level names
+    var_levels <- levels(factor(data_do$var_class))
+    tidy_out <- tidy_out %>%
+      rename_with(~ var_levels, c("estimate1", "estimate2"))
+
+    tidy_out
+  }) %>%
+  pivot_longer(
+    cols = c("not variable", "variable"),  # adjust if needed
+    names_to = "mean_group",
+    values_to = "mean_value"
+  )
+
+class_results_residue_means
+```
+
+```{r, fig.width=14}
+class_results_residue_means %>%
+  ggplot(aes(x = Score_Type, fill = mean_group, y = mean_value, group = interaction(Score_Type, mean_group))) +
+  geom_violin(
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
+  ) +
+  
+  geom_line(
+    aes(
+      x = as.numeric(factor(Score_Type)) + ifelse(mean_group == "not variable", -0.2, 0.2),
+      group = interaction(PDB, Score_Type),
+      color = proteinclass,
+      alpha = -log10(p.value)
+    )
+  ) +
+  
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
+  ) +
+  geom_point(
+    aes(color = proteinclass),
+    position = position_dodge(width = 0.8)
+  ) +
+  
+  stat_compare_means(
+    #aes(group = interaction(Score_Type, mean_group)),
+    #comparisons = c("not variable", "variable"),
+    method = "wilcox.test",
+    label = "p.signif",
+    hide.ns = FALSE
+  ) +
+  
+  #geom_text(
+  #  aes(
+  #    x = Score_Type, 
+  #    group = interaction(Score_Type, mean_group),
+  #    label = case_when(
+  #      p.value < 0.001 ~ "***",
+  #      p.value < 0.01  ~ "**",
+  #      p.value < 0.05  ~ "*",
+  #      TRUE            ~ "ns"
+  #    )
+  #  )
+  #) +
+  
+  theme_bw() +
+  labs(
+    x = "Prediction method",
+    y = "Mean prediction score",
+    title = "Mean prediction score: not variable vs variable (wilcox.test)"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "not variable" = "#999999",
+      "variable" = "#E69F00"
+    )
+  ) +
+  
+  scale_alpha_continuous(
+    limits = c(0,2),
+    breaks = c(0, -log10(0.05), 2)
+  ) +
+  
+  facet_wrap(~var_class_type, nrow=2) 
+
+  
+```
+
+```{r, fig.width=14}
+class_results_residue_means %>%
+  ggplot(aes(x = Score_Type, fill = mean_group, y = mean_value, group = interaction(Score_Type, mean_group))) +
+  geom_violin(
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
+  ) +
+  
+  geom_line(
+    aes(
+      x = as.numeric(factor(Score_Type)) + ifelse(mean_group == "not variable", -0.2, 0.2),
+      group = interaction(PDB, Score_Type),
+      color = proteinclass,
+      alpha = -log10(p.value)
+    )
+  ) +
+  
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
+  ) +
+  geom_point(
+    aes(color = proteinclass),
+    position = position_dodge(width = 0.8)
+  ) +
+  
+  stat_compare_means(
+    #aes(group = interaction(Score_Type, mean_group)),
+    #comparisons = c("not variable", "variable"),
+    method = "wilcox.test",
+    label = "p.signif",
+    hide.ns = FALSE
+  ) +
+  
+  #geom_text(
+  #  aes(
+  #    x = Score_Type, 
+  #    group = interaction(Score_Type, mean_group),
+  #    label = case_when(
+  #      p.value < 0.001 ~ "***",
+  #      p.value < 0.01  ~ "**",
+  #      p.value < 0.05  ~ "*",
+  #      TRUE            ~ "ns"
+  #    )
+  #  )
+  #) +
+
+  labs(
+    x = "Prediction method",
+    y = "Mean prediction score",
+    title = "Mean prediction score: not variable vs variable (wilcox.test)"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "not variable" = "#999999",
+      "variable" = "#E69F00"
+    )
+  ) +
+  
+  scale_alpha_continuous(
+    limits = c(0,2),
+    breaks = c(0, -log10(0.05), 2)
+  ) +
+  facet_grid(var_class_type~proteinclass) +
+  
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
+  )
+
+  
+```
+
+
+## 10A radius
+```{r}
+get_min_distance_to_var <- function(df_sub, min_var_freq = 0) {
+  # Separate variable residues and all residues
+  var_res <- df_sub %>% filter(var_freq > min_var_freq)
+  all_res <- df_sub
+  
+  # If no variable residues, return Inf and NA for all
+  if (nrow(var_res) == 0) {
+    all_res <- all_res %>%
+      mutate(min_distance_to_var = NA_real_, closest_var_freq = NA_real_)
+    return(all_res)
+  }
+  
+  # Coordinates matrix
+  coords_all <- as.matrix(all_res[, c("x", "y", "z")])
+  coords_var <- as.matrix(var_res[, c("x", "y", "z")])
+  
+  # Find nearest variable residue for each residue
+  nn_res <- RANN::nn2(coords_var, coords_all, k = 1)
+  
+  # nn_res$nn.dists is the distance; nn_res$nn.idx the index of closest var residue
+  all_res <- all_res %>%
+    mutate(
+      min_distance_to_var = nn_res$nn.dists,
+      closest_var_freq = var_res$var_freq[nn_res$nn.idx]
+    )
+  
+  return(all_res)
+}
+```
+
+```{r}
+results_all_radius <- data_predictions_with_variability_normalized %>%
+  group_by(PDB, chain) %>%
+  group_modify(~ get_min_distance_to_var(.x)) %>%
+  ungroup()
+
+results_all_radius
+```
+
+```{r}
+max_residue_distance <- 10
+
+class_results_radius_means <- results_all_radius %>%
+  pivot_longer(
+    cols = pivot_list, 
+    names_to = "Score_Type", values_to = "Score_Value"
+  ) %>%
+  mutate(
+    near_variable_00 = case_when(
+      is.na(closest_var_freq) ~ NA_character_,
+      closest_var_freq >= 0 & min_distance_to_var <= max_residue_distance ~ "yes",
+      TRUE ~ "no"
+    ),
+    near_variable_05 = case_when(
+      is.na(closest_var_freq) ~ NA_character_,
+      closest_var_freq >= 0.05 & min_distance_to_var <= max_residue_distance ~ "yes",
+      TRUE ~ "no"
+    )
+  ) %>%
+  
+  pivot_longer(
+    cols = c(near_variable_00, near_variable_05),
+    names_to = "near_variable_type",
+    values_to = "near_variable"
+  ) %>%
+  
+  mutate(
+    near_variable = factor(
+      near_variable,
+      levels = c("no", "yes")
+    )
+  ) %>%
+  
+  group_by(PDB,protein,proteinclass, Score_Type, near_variable_type) %>%
+  drop_na() %>%
+  group_modify(function(.x, .y) {
+    data_do <- .x
+    
+    # Ensure var_class has exactly 2 levels
+    if (n_distinct(data_do$near_variable) != 2) {
+      return(tibble())
+    }
+    
+    # Ensure both groups have at least 2 observations
+    counts <- table(data_do$near_variable)
+    if (any(counts < 2)) {
+      return(tibble())
+    }
+
+    # Run t-test
+    test <- t.test(Score_Value ~ near_variable, data = data_do)
+    tidy_out <- tidy(test)
+
+    # Rename group means using actual level names
+    var_levels <- levels(factor(data_do$near_variable))
+    tidy_out <- tidy_out %>%
+      rename_with(~ var_levels, c("estimate1", "estimate2"))
+
+    tidy_out
+  }) %>%
+  
+  
+  #do({
+  #  data_do <- .
+  #  test <- t.test(Score_Value ~ near_variable, data = data_do)
+  #  tidy_out <- tidy(test)
+  #  
+  #  var_levels <- levels(data_do$near_variable)
+  #  
+  #  tidy_out <- tidy_out %>%
+  #    rename_with(~var_levels, c("estimate1", "estimate2"))
+  #  tidy_out
+  #}) %>%
+  pivot_longer(
+    cols = c("no", "yes"),
+    names_to = "near_variable", values_to = "group_mean"
+  ) %>%
+  mutate(
+    near_variable = factor(
+      near_variable, 
+      levels = c("no", "yes")
+    )
+  ) 
+
+class_results_radius_means
+```
+
+```{r, fig.width=14}
+class_results_radius_means %>%
+  ggplot(aes(x = Score_Type, fill = near_variable, y = group_mean, group = interaction(Score_Type, near_variable))) +
+  geom_violin(
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
+  ) +
+  
+  geom_line(
+    aes(
+      x = as.numeric(factor(Score_Type)) + ifelse(near_variable == "no", -0.2, 0.2),
+      group = interaction(PDB, Score_Type),
+      color = proteinclass
+    )
+  ) +
+  
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
+  ) +
+  geom_point(
+    aes(color = proteinclass),
+    position = position_dodge(width = 0.8)
+    ) +
+  
+  stat_compare_means(
+    #aes(group = interaction(Score_Type, mean_group)),
+    #comparisons = c("not variable", "variable"),
+    method = "wilcox.test",
+    label = "p.signif",
+    hide.ns = FALSE
+  ) +
+  
+  labs(
+    x = "Prediction method",
+    y = "Mean prediction score",
+    title = "Mean prediction score: not variable vs near variable (t.test)",
+    subtitle = paste0("Within ", max_residue_distance, " A"),
+  ) +
+  scale_fill_manual(
+    values = c(
+      "no" = "#999999",
+      "yes" = "#E69F00"
+    )
+  ) +
+  
+  theme_bw() +
+  facet_wrap(~near_variable_type, nrow=2)
+  
+  
+ 
+```
+
+```{r, fig.width=14}
+class_results_radius_means %>%
+  ggplot(aes(x = Score_Type, fill = near_variable, y = group_mean, group = interaction(Score_Type, near_variable))) +
+  geom_violin(
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
+  ) +
+  
+  geom_line(
+    aes(
+      x = as.numeric(factor(Score_Type)) + ifelse(near_variable == "no", -0.2, 0.2),
+      group = interaction(PDB, Score_Type),
+      color = proteinclass
+    )
+  ) +
+  
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
+  ) +
+  geom_point(
+    aes(color = proteinclass),
+    position = position_dodge(width = 0.8)
+    ) +
+  
+  stat_compare_means(
+    #aes(group = interaction(Score_Type, near_variable)),
+    #comparisons = c("not variable", "variable"),
+    method = "wilcox.test",
+    label = "p.signif",
+    hide.ns = FALSE
+  ) +
+  
+  labs(
+    x = "Prediction method",
+    y = "Mean prediction score",
+    title = "Mean prediction score: not variable vs near variable (t.test)",
+    subtitle = paste0("Within ", max_residue_distance, " A"),
+  ) +
+  scale_fill_manual(
+    values = c(
+      "no" = "#999999",
+      "yes" = "#E69F00"
+    )
+  ) +
+  
+  facet_grid(near_variable_type~proteinclass) +
+  
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
+  )
+  
+```
+
+## mixed effects
+```{r}
+library(MuMIn)
+library(broom.mixed)
+library(lmerTest)
+library(lme4)
+
+mixed_effects <- data_predictions_with_variability_normalized %>% 
+  pivot_longer(cols = pivot_list, 
+               names_to = "Score_Type", values_to = "Score_Value") %>%
+  group_by(Score_Type) %>%
+  group_modify(~ {
+    model <- lmer(Score_Value ~ RSA + var_freq + (1 | proteinclass/protein/PDB), data = .x)
+    print(colnames(summary(model)$coefficients))
+    r2 <- r.squaredGLMM(model)
+    
+    # Extract fixed effects with p-values from lmerTest summary
+    coef_df <- summary(model)$coefficients %>%
+      as.data.frame() %>%
+      tibble::rownames_to_column("term") %>%
+      select(
+        term,
+        estimate = Estimate,
+        std.error = `Std. Error`,
+        statistic = `t value`,
+        p.value = `Pr(>|t|)`
+      )
+    
+    tibble(
+      marginal_r2 = r2[1],
+      conditional_r2 = r2[2],
+      term_data = list(coef_df)
+    )
+  }) %>%
+  unnest(term_data)
+
+colnames(mixed_effects)
+mixed_effects
+```
+
+```{r, fig.width=14}
+mixed_effects %>%
+  #filter(effect == "fixed") %>%
+  ggplot(aes(x=term, y=estimate)) +
+  geom_point(
+    #aes(size=-log10(p.value))
+    ) +
+  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+  facet_wrap(~ Score_Type) +
+  theme_bw() +
+  labs(title = "Fixed Effect Estimates per Score Type",
+       y = "Estimate", x = "Term") +
+  
+  scale_size_continuous(
+        limits = c(0, 3),
+        breaks = c(-log10(0.1),-log10(0.05), 2, 3),  # Use -log10(0.05) as a significant break
+        labels = c("0.1","0.05", "0.01", "0.001"),
+        name = "p-value"
+      ) +
+  
+  
+  geom_text(
+    data = mixed_effects %>%
+      distinct(Score_Type, marginal_r2, conditional_r2) %>%
+      mutate(
+        label = paste0("Marginal R²: ", round(marginal_r2, 3), "\n",
+                       "Conditional R²: ", round(conditional_r2, 3)),
+        x = Inf,
+        y = Inf
+      ),
+    aes(x = x, y = y, label = label),
+    inherit.aes = FALSE,
+    hjust = 1.1,
+    vjust = 1.1,
+    size = 5
+  ) +
+  
+  geom_text(
+    aes(
+      label = case_when(
+        p.value < 0.001 ~ "***",
+        p.value < 0.01  ~ "**",
+        p.value < 0.05  ~ "*",
+        TRUE            ~ "ns"
+      ), 
+      vjust = -(std.error + 0.2) 
+      
+    )
+  )
+
+```
+
+### radius
+```{r}
+mixed_effects_radius <- results_all_radius %>%
+  mutate(
+    min_distance_to_var = case_when(
+      min_distance_to_var == Inf ~ NA,
+      TRUE ~ min_distance_to_var
+    )
+  ) %>%
+  pivot_longer(cols = pivot_list, 
+               names_to = "Score_Type", values_to = "Score_Value") %>%
+  group_by(Score_Type) %>%
+  group_modify(~ {
+    model <- lmer(
+      Score_Value ~ RSA + (1 | proteinclass/protein/PDB) + closest_var_freq*min_distance_to_var,
+      data = .x
+    )
+    print(colnames(summary(model)$coefficients))
+    r2 <- r.squaredGLMM(model)
+    
+    # Extract fixed effects with p-values from lmerTest summary
+    coef_df <- summary(model)$coefficients %>%
+      as.data.frame() %>%
+      tibble::rownames_to_column("term") %>%
+      select(
+        term,
+        estimate = Estimate,
+        std.error = `Std. Error`,
+        statistic = `t value`,
+        p.value = `Pr(>|t|)`
+      )
+    
+    tibble(
+      marginal_r2 = r2[1],
+      conditional_r2 = r2[2],
+      term_data = list(coef_df)
+    )
+  }) %>%
+  unnest(term_data)
+  
+
+mixed_effects_radius
+```
+
+```{r, fig.width=14}
+mixed_effects_radius %>%
+  #filter(effect == "fixed") %>%
+  mutate(
+    term = factor(
+      term,
+      levels = c("(Intercept)","RSA", "closest_var_freq", "min_distance_to_var", "closest_var_freq:min_distance_to_var")
+    )
+  ) %>%
+  ggplot(aes(x=term, y=estimate)) +
+  geom_point(
+    #aes(size=-log10(p.value))
+    ) +
+  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+  facet_wrap(~ Score_Type) +
+  theme_bw() +
+  labs(title = "Fixed Effect Estimates per Score Type",
+       y = "Estimate", x = "Term") +
+  
+  scale_size_continuous(
+        limits = c(0, 3),
+        breaks = c(-log10(0.1),-log10(0.05), 2, 3),  # Use -log10(0.05) as a significant break
+        labels = c("0.1","0.05", "0.01", "0.001"),
+        name = "p-value"
+      ) +
+  
+  
+  geom_text(
+    data = mixed_effects_radius %>%
+      distinct(Score_Type, marginal_r2, conditional_r2) %>%
+      mutate(
+        label = paste0("Marginal R²: ", round(marginal_r2, 3), "\n",
+                       "Conditional R²: ", round(conditional_r2, 3)),
+        x = Inf,
+        y = Inf
+      ),
+    aes(x = x, y = y, label = label),
+    inherit.aes = FALSE,
+    hjust = 1.1,
+    vjust = 1.1,
+    size = 5
+  ) +
+  
+  geom_text(
+    aes(
+      label = case_when(
+        p.value < 0.001 ~ "***",
+        p.value < 0.01  ~ "**",
+        p.value < 0.05  ~ "*",
+        TRUE            ~ "ns"
+      ), 
+      vjust = -(std.error + 0.2) 
+      
+    )
+  ) +
+  
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
+  )
+```
+
+## New classification
+```{r}
+min_var_freq = 0.05
+max_distance_to_var = 10
+min_RSA = 0.2
+
+results_all_radius_classification <- data_predictions_with_variability_normalized %>%
+  group_by(PDB, chain) %>%
+  group_modify(~ get_min_distance_to_var(.x, min_var_freq)) %>%
+  mutate(
+    min_distance_to_var = case_when(
+      min_distance_to_var == Inf ~ NA,
+      TRUE ~ min_distance_to_var
+    ),
+    
+    is_surface = case_when(
+      RSA > min_RSA ~ "yes",
+      TRUE ~ "no"
+    ),
+    
+    is_near_var = case_when(
+      min_distance_to_var <= max_distance_to_var ~ "yes",
+      TRUE ~ "no"
+    )
+    
+  )
+
+results_all_radius_classification
+```
+
+```{r, fig.width=14}
+p_adjust_method <- "bonferroni"
+
+results_all_radius_classification_means <- results_all_radius_classification %>% 
+  pivot_longer(cols = pivot_list, 
+               names_to = "Score_Type", values_to = "Score_Value") %>%
+  group_by(proteinclass,protein,PDB, Score_Type, is_surface, is_near_var) %>%
+  summarise(
+    mean_score = mean(Score_Value, na.rm = TRUE),
+    n = n()
+  ) %>%
+  mutate(
+    is_sur.var = factor(
+      interaction(is_surface, is_near_var),
+      levels = c("no.no","no.yes", "yes.no", "yes.yes")
+      )
+    )
+
+results_all_radius_classification_means %>%
+  
+  ggplot(aes(x = is_sur.var, y = mean_score)) +
+  
+  geom_path(aes(group = PDB, col = proteinclass)) +
+  
+  geom_violin(
+    aes(fill = is_sur.var),
+    trim = FALSE, scale = "width", alpha = 0.6, show.legend = FALSE
+  ) +
+  
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8
+  ) +
+  
+  geom_point(
+    aes(color = proteinclass)
+    ) +
+  
+  stat_compare_means(
+    aes(group = PDB),  
+    method = "wilcox",
+    label = "p.signif",
+    comparisons = combn(levels(results_all_radius_classification_means$is_sur.var), 2, simplify = FALSE),
+    p.adjust.method = p_adjust_method
+  ) +
+  
+  theme_bw() +
+  
+  facet_wrap(~Score_Type, 
+             #scales = "free_y",
+             nrow=2) +
+  
+  labs(
+    title = "Mean score comparisons per Score Type",
+    subtitle = paste0(
+      "minimum variability: ", min_var_freq,
+      ", maximum distance to variable residue: ", max_distance_to_var, " A",
+      ", minimum RSA: ", min_RSA,
+      ", correction: ", p_adjust_method
+    ),
+    y = "Mean Score", 
+    x = "comparison(is surface, is near variable)"
+  ) +
+  
+  scale_fill_manual(
+    values = c("no.no" = "#D55E00","no.yes" = "#E69F00", "yes.no" = "#0072B2", "yes.yes" = "#56B4E9")
+  )
+
+```
+
+
+```{r, fig.width=14}
+p_adjust_method <- "BH"
+
+results_all_radius_classification_means %>%
+  filter(Score_Type != "BepiPred-2.0 probability") %>%
+  
+  ggplot(aes(x = is_sur.var, y = mean_score)) +
+  
+  geom_path(aes(group = PDB, col = proteinclass)) +
+  
+  geom_violin(
+    aes(fill = is_sur.var),
+    trim = FALSE, scale = "width", alpha = 0.6, show.legend = FALSE
+  ) +
+  
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8
+  ) +
+  
+  geom_point(
+    aes(color = proteinclass)
+    ) +
+  
+  stat_compare_means(
+    aes(group = PDB),  
+    method = "wilcox",
+    label = "p.signif",
+    comparisons = combn(levels(results_all_radius_classification_means$is_sur.var), 2, simplify = FALSE),
+    p.adjust.method = p_adjust_method
+  ) +
+  
+  theme_bw() +
+  
+  facet_grid(Score_Type~proteinclass, scales = "free_y") +
+  
+  labs(
+    title = "Mean score comparisons per Score Type",
+    subtitle = paste0(
+      "minimum variability: ", min_var_freq,
+      ", maximum distance to variable residue: ", max_distance_to_var, " A",
+      ", minimum RSA: ", min_RSA,
+      ", correction: ", p_adjust_method
+    ),
+    y = "Mean Score", 
+    x = "comparison(is surface, is near variable)"
+  ) +
+  
+  scale_fill_manual(
+    values = c("no.no" = "#D55E00","no.yes" = "#E69F00", "yes.no" = "#0072B2", "yes.yes" = "#56B4E9")
+  ) +
+  
+  theme(
+    panel.spacing = unit(0, "lines"),
+    #strip.background = element_blank(),
+    strip.placement = "outside",
+    panel.border = element_blank(),
+    axis.line = element_line()
+  ) 
+
+```
 

@@ -40,15 +40,19 @@ for (zip_file in AlphaFold3_zip_files) {
 ```
 
 ```{r}
-AlphaFold3_folders <- list.dirs(path = "output/AlphaFold3/individual_files", full.names = FALSE, recursive = FALSE)
+AlphaFold3_recombinant_folders <- grep(
+  "_recombinant_protein",
+  list.dirs(path = "output/AlphaFold3/individual_files", full.names = FALSE, recursive = FALSE),
+  value = TRUE
+)
 
-last(AlphaFold3_folders)
+last(AlphaFold3_recombinant_folders)
 ```
 
 
 ## Convert cif files with highest average b-value per protein
 ```{r}
-for (AlphaFold3_folder in AlphaFold3_folders) {
+for (AlphaFold3_folder in AlphaFold3_recombinant_folders) {
   folder_path <- paste0("output/AlphaFold3/individual_files/", AlphaFold3_folder)
   cif_file_paths <- list.files(path = folder_path, pattern = "\\.cif$", full.names=TRUE)
   
@@ -82,7 +86,7 @@ for (AlphaFold3_folder in AlphaFold3_folders) {
   # Read the CIF object of the selected file
   highest_cif_object <- read.cif.custom(highest_cif_file)
   
-  write.pdb(highest_cif_object, file=paste0("output/AlphaFold3/generated_pdb/",protein_name,"_fold_",highest_fold,".pdb"))
+  write.pdb(highest_cif_object, file=paste0("output/AlphaFold3/generated_pdb/recombinant/",protein_name,"_fold_",highest_fold,".pdb"))
 }
 ```
 
@@ -125,7 +129,7 @@ write.csv(data_AF3_recombinant,
 
 ### highest only
 ```{r}
-recombinant_pdb_files_list <- list.files(path="output/AlphaFold3/generated_pdb/",pattern=".pdb", )
+recombinant_pdb_files_list <- list.files(path="output/AlphaFold3/generated_pdb/recombinant/",pattern=".pdb", )
 recombinant_pdb_files_list
 
 data_AF3_recombinant_highest <- NULL
@@ -134,7 +138,7 @@ for (pdb_file in recombinant_pdb_files_list) {
   protein_name <- gsub("(.*?)_fold.*", "\\1", pdb_file)
   print(protein_name)
 
-  pdb_object <- read.pdb(file =  paste0("output/AlphaFold3/generated_pdb/",pdb_file))
+  pdb_object <- read.pdb(file =  paste0("output/AlphaFold3/generated_pdb/recombinant/",pdb_file))
   
   atom_df_subset <- pdb_object$atom %>%
     mutate(protein = protein_name)
@@ -311,5 +315,91 @@ data_AF3_recombinant_highest_with_class %>%
          color = guide_legend(override.aes = list(alpha = 0.5), order=1),  # Overlapping legends
          linetype = guide_legend(order = 2)) +
   theme_minimal() 
+```
+
+# Redo for missing proteins
+```{r}
+variable_proteins_without_structure <- readRDS("data/variable_proteins_without_structure.rds")
+variable_proteins_without_structure
+```
+
+```{r}
+# Define input and output paths
+fasta_file <- "data/fasta/variable_proteins_without_structure.fasta"
+output_json_file <- "output/AlphaFold3/variable_proteins_without_structure_sequences.json"
+
+json_data <- generate_json(fasta_file, suffix = "vws", )
+write_json_file(json_data, output_json_file)
+```
+
+```{r}
+read.fasta(fasta_file)
+```
+
+
+## convert cif to pdb
+```{r}
+AlphaFold3_vws_folders <- grep(
+  "_vws",
+  list.dirs(path = "output/AlphaFold3/individual_files", full.names = FALSE, recursive = FALSE),
+  value = TRUE
+)
+
+AlphaFold3_vws_folders
+```
+
+
+```{r}
+for (AlphaFold3_folder in AlphaFold3_vws_folders) {
+  folder_path <- paste0("output/AlphaFold3/individual_files/", AlphaFold3_folder)
+  cif_file_paths <- list.files(path = folder_path, pattern = "\\.cif$", full.names=TRUE)
+  
+  atom_df_cif <- NULL
+  
+  for (cif_file in cif_file_paths) {
+    file_name <- sub("\\.cif$", "", basename(cif_file))
+    
+    protein_name <- gsub("fold_(.*?)_vws*", "\\1", file_name)
+    fold_number <- gsub(".*_(\\d+)$", "\\1", file_name)
+    
+    cif_object <- read.cif.custom(cif_file)
+    
+    cif_df <- cif_object$atom %>%
+      mutate(fold_number = fold_number)
+    
+    atom_df_cif <- bind_rows(atom_df_cif, cif_df)
+  }
+  
+  highest_fold <- atom_df_cif %>%
+    group_by(fold_number) %>%
+    summarize(mean_b = mean(b)) %>%
+    arrange(desc(mean_b)) %>%
+    head(1) %>%
+    pull(fold_number)
+  
+  mean_b <- atom_df_cif %>%
+    group_by(fold_number) %>%
+    summarize(mean_b = mean(b)) %>%
+    arrange(desc(mean_b)) %>%
+    head(1) %>%
+    pull(mean_b)
+  
+  highest_cif_file <- cif_file_paths[grepl(paste0("_", highest_fold, "\\.cif$"), cif_file_paths)]
+  
+  print(paste("Selected CIF file: ", highest_cif_file, " mean b: ", mean_b))
+  
+  # Read the CIF object of the selected file
+  highest_cif_object <- read.cif.custom(highest_cif_file)
+  
+  write.pdb(highest_cif_object, file=paste0("output/AlphaFold3/generated_pdb/vws/",protein_name,"_fold_",highest_fold,".pdb"))
+}
+```
+
+```{r}
+AF3_pdb_file <- read.pdb.custom(pdb_entry = "alia_model_4_fold_0", pdb_path = "output/AlphaFold3/generated_pdb/vws/")
+```
+
+```{r}
+AF3_pdb_file$atom 
 ```
 

@@ -28,7 +28,6 @@ aln_protein_names <- sapply(basename(fasfiles), function(x) {
   }
 })
 
-
 aln_protein_names
 ```
 
@@ -71,7 +70,8 @@ for (fasfile in fasfiles) {
     # Perform the alignment
     alignment <- AlignSeqs(aa_seqs,
                           gapOpening = c(-18, -10),
-                          gapExtension = -3)
+                          gapExtension = -3,
+                          terminalGap = -0.1)
     
     aligned_aa_seqs <- as(alignment, "AAStringSet")
     #print(aligned_aa_seqs)
@@ -99,7 +99,6 @@ aln_protein_names <- sapply(basename(AA_fasfiles), function(x) {
   }
 })
 
-
 aln_protein_names
 ```
 
@@ -113,10 +112,43 @@ map_namesclasspdb_aln <- data_namesclasspdb %>%
     tibble(
       protein = unname(aln_protein_names),
       matched_filename = names(aln_protein_names)
+    ) %>%
+  filter(
+    !matched_filename %in% c(
+      "20 NgtS_old_group_1787.AA.aln.fas",
+      "28 MsrAB2_new_group_213.AA.aln.fas", 
+      "28 MsrAB2_old_group_213.AA.aln.fas",
+      "28 MsrAB2_msrAB.AA.aln.fas")
     )
+  ) 
+
+map_namesclasspdb_aln 
+```
+
+###test
+```{r}
+msa_msrAB1 <- readAAStringSet(filepath = "data/bioedit/fas/AA/msrAB.AA.aln.fas")
+msa_msrAB <- readAAStringSet(filepath = "data/bioedit/fas/AA/msrAB1.AA.aln.fas")
+
+msrAB_profiles <- AlignProfiles(
+    pattern = msa_msrAB1, 
+    subject = msa_msrAB,
+    #gapOpening = c(-15,-10), 
+    #gapExtension = -4, 
+    terminalGap = -0.1#,
   )
 
-map_namesclasspdb_aln
+fasta_3E0M <- readAAStringSet(filepath = "data/fasta/pdb_protein_sequences.fasta")["3E0M"]
+
+aligned_profiles <- AlignProfiles(
+    pattern = fasta_3E0M, 
+    subject = msrAB_profiles,
+    #gapOpening = c(-15,-10), 
+    #gapExtension = -4, 
+    terminalGap = -0.1#,
+  )
+
+BrowseSeqs(aligned_profiles)
 ```
 
 ### realign
@@ -287,7 +319,7 @@ aligned_resno
 ```
 
 
-```{r}
+```{}
 #check missing ones
 sort(unique(map_namesclasspdb_aln$protein))
 sort(unique(aligned_resno$protein))
@@ -452,7 +484,7 @@ cat("\nProcessing protein:", protein_name, "\n")
 }
 ```
 
-```{r}
+```{}
 BrowseSeqs(aligned_combined)
 ```
 
@@ -533,7 +565,7 @@ for (protein_name in unique(na.omit(map_namesclasspdb_aln)$protein)) {
         resid_1 = aa321(resid),
         posno = row_number()
       ) %>% 
-      select(proteinclass,protein,PDB,chain,resno,resid, posno, resid_1) 
+      select(proteinclass,protein,PDB,chain,resno,resid, posno, resid_1,x,y,z) 
     
     if (is.null(map_aln_resno)) {
       map_aln_resno <- map_aln_resno_subset
@@ -596,6 +628,20 @@ for (protein_name in unique(na.omit(map_namesclasspdb_aln)$protein)) {
   
 }
 
+aligned_resno <- aligned_resno %>%
+  mutate(
+    protein = if_else(
+      is.na(protein),
+      data_namesclasspdb$protein[match(PDB, data_namesclasspdb$PDB)],
+      protein
+    ),
+    proteinclass = if_else(
+      is.na(proteinclass),
+      data_namesclasspdb$proteinclass[match(PDB, data_namesclasspdb$PDB)],
+      proteinclass
+    )
+  )
+
 aligned_resno
 ```
 
@@ -629,27 +675,34 @@ mismatch
 ```
 
 ## Calculate variability
-```{, warning=FALSE}
+```{r}
+AA_fasfiles
+
+AA_alnfiles_path
+```
+
+
+```{r, warning=FALSE}
 data_variability <- NULL
 
-for (fasfile in AA_fasfiles) {
+for (fasfile in na.omit(unique(map_namesclasspdb_aln$matched_filename))){
   print(basename(fasfile))
   
-  protein_name <-  sapply(basename(fasfile), function(x) {
-    if (grepl("^\\d+[ _]SP_\\d{4}", x)) {
-      # number + (space or underscore) + SP_xxxx
-      sub(".*(SP_\\d{4}).*", "\\1", x)
-    } else {
-      # number + (space or underscore) + Name
-      sub("^\\d+[ _]([^_]+).*", "\\1", x)
-    }
-  })
+  protein_name <- if (grepl("^\\d+[ _]SP_\\d{4}", basename(fasfile))) {
+    sub(".*(SP_\\d{4}).*", "\\1", basename(fasfile))
+  } else {
+    sub("^\\d+[ _]([^_]+).*", "\\1", basename(fasfile))
+  }
+  
+  print(protein_name)
   
   tryCatch({
-    aligned_aa_seqs <- readAAStringSet(fasfile)
+    aligned_aa_seqs <- readAAStringSet(paste0(AA_alnfiles_path,"/",fasfile))
     #print(aligned_aa_seqs)
     
     data_variability_subset <- calculate_variability(aligned_aa_seqs)
+    
+    data_variability_subset$protein <- protein_name
     
     data_variability <- rbind(data_variability, data_variability_subset)
     
@@ -659,20 +712,32 @@ for (fasfile in AA_fasfiles) {
   
 }
 
+data_variability <- data_variability %>% 
+  left_join(map_namesclasspdb_aln, by = "protein") %>%
+  select(-matched_filename)
+
 data_variability
 ```
 
 
 
 
-
 #missing proteins
 ```{r}
-setdiff(aln_protein_names, unique(data_variability$protein))
+#proteins without variability
+setdiff(data_namesclasspdb$protein, aln_protein_names)
+```
+
+
+```{r}
+proteins_without_structure <- setdiff(aln_protein_names, unique(data_variability$protein))
+proteins_without_structure
+
+saveRDS(proteins_without_structure, file = "data/variable_proteins_without_structure.rds")
 ```
 
 ```{r}
-write.csv(aligned_resno,
+write.csv(data_variability,
           "output/data_variability.csv", 
           row.names=FALSE)
 ```
@@ -762,7 +827,7 @@ for (proteinindex in unique(data_variability$protein)) {
 #### filter out all INDELS
 ```{r}
 #without consensus_gaps
-for (proteinindex in unique(data_variability$protein)[27]) {
+for (proteinindex in unique(data_variability$protein)) {
   data_subset <- data_variability %>% filter(protein == proteinindex,
                                              consensus_res != "-") %>%
     mutate(position_new = row_number())
@@ -791,4 +856,188 @@ for (proteinindex in unique(data_variability$protein)) {
     print(plot)
 }
 ```
+
+# summary statistics
+```{r}
+data_variability %>% pull(protein) %>% unique()
+```
+
+
+```{r}
+data_variability <- read.csv("output/data_variability.csv")
+
+data_variability
+```
+
+
+```{r}
+data_variability_with_seroprof <- data_variability %>%
+  mutate(
+    protein = case_when(
+      protein == "Pneumolysin" ~ "Ply",
+      TRUE ~ protein
+    ),
+    seroprof_titers = factor(
+      case_when(
+        protein %in% c("Ply", "Hic2", "PspA", "SP_2063", "PpmA", "PnrA", "LytC", "SP_0107", "PavB", "AmiA", "AliC", "AliB", "PsaA", "PhtD", "PcsB", "PrtA2", "PcpA", "PspC") ~ "High",
+        protein %in% c("PitB", "PccL", "PiaA", "PfbA", "LytA", "GlpO", "AliA", "PhpP", "PstS2", "SlrA", "CbpL", "CbpC", "CbpE", "DacB", "NanA") ~ "Intermediate",
+        protein %in% c("MetQ", "MalX", "Enolase", "AliD", "SP_0699", "SP_1069", "NgtS", "RrgB", "RrgA", "MsrAB2", "GshT", "AdcAII", "TrxB", "SP_2141", "SP_0060", "Etrx2", "SP_0191", "LytB", "PepO", "SP_1992", "Etrx1") ~ "Low",
+        TRUE ~ NA_character_
+      ),
+      levels = c("High", "Intermediate", "Low")
+    )
+  )
+
+data_variability_with_seroprof
+
+```
+
+```{r}
+ordered_proteins <- data_variability_with_seroprof %>%
+  select(seroprof_titers, proteinclass, protein, n_seq, seq_length) %>%
+  distinct() %>%
+  arrange(desc(n_seq)) %>%
+  pull(protein) %>%
+  unique()
+```
+
+
+```{r, fig.width=14}
+upper_plot <- data_variability_with_seroprof %>%
+  select(seroprof_titers, proteinclass,protein,n_seq,seq_length) %>%
+  distinct() %>%
+  group_by(seroprof_titers) %>%
+  arrange(desc(n_seq)) %>% 
+  mutate(
+    protein = factor(
+      protein, 
+      levels = ordered_proteins
+    )
+  ) %>%
+  
+  ggplot(aes(x=protein)) +
+  
+  geom_rect(
+        aes(
+            xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, fill = seroprof_titers
+        ),
+        inherit.aes = FALSE, alpha = 0.3,
+        data = data_variability_with_seroprof %>% distinct(seroprof_titers),
+        show.legend = FALSE  # Exclude facet-based color fill from the legend
+    ) +
+  
+  scale_fill_brewer(palette = "RdYlBu") +
+  
+  new_scale_fill() +
+  
+  geom_col(aes(y = n_seq, fill = proteinclass)) +
+  
+  facet_grid(
+        ~seroprof_titers,
+        scales = "free_x",
+        space = "free_x",
+        labeller = label_wrap_gen(width = 10)
+    ) +
+  
+  labs(y = "Number of sequences", x = NULL) +
+  
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)), limits = c(0, NA)) +
+  
+  theme_bw() +
+  
+  theme(
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(size = 16), # Adjust facet label text size
+    panel.background = element_rect(fill = "white", colour = "white"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(0, "lines"),
+    axis.line = element_line(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+upper_plot
+```
+
+```{r, fig.width=14}
+min_var_freq = 0.05
+
+lower_plot <- data_variability_with_seroprof %>%
+  group_by(seroprof_titers,proteinclass, protein, seq_length) %>%
+  summarize(
+    nonzero_var_count = sum(var_freq > min_var_freq),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(seq_length)) %>%
+  mutate(
+    normalized_var = nonzero_var_count / seq_length,
+    protein = factor(protein, levels = ordered_proteins)
+  ) %>%
+  
+  ggplot(aes(x = protein, y = normalized_var)) +
+  
+  geom_rect(
+    aes(
+      xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, fill = seroprof_titers
+    ),
+    inherit.aes = FALSE, alpha = 0.3,
+    data = data_variability_with_seroprof %>% distinct(seroprof_titers),
+    show.legend = FALSE  # Exclude facet-based color fill from the legend
+  ) +
+  
+  scale_fill_brewer(palette = "RdYlBu") +
+  
+  new_scale_fill() +
+  
+  geom_col(aes(fill = proteinclass)) +
+  
+  facet_grid(
+    ~seroprof_titers,
+    scales = "free_x",
+    space = "free_x",
+    labeller = label_wrap_gen(width = 10)
+  ) +
+  
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)), limits = c(0, NA), breaks = seq(0, 1, by = 0.1) ) +
+  
+  theme_bw() +
+  
+  labs(y = "Normalized Variability", x = NULL) +
+  theme(
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(size = 16), # Adjust facet label text size
+    panel.background = element_rect(fill = "white", colour = "white"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(0, "lines"),
+    axis.line = element_line(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+lower_plot
+```
+
+```{r, fig.width=14}
+plot_grid(
+  upper_plot + 
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      plot.margin = margin(t = 5, r = 5, b = 1.5, l = 5)
+    )
+  ,
+  lower_plot + 
+    theme(
+      strip.text = element_blank(),
+      strip.background = element_blank(),
+      legend.position = "none",
+      plot.margin = margin(t = 0, r = 5, b = 5, l = 5) 
+    ),
+  ncol = 1,
+  align = "v",
+  axis = "rl",
+  rel_heights = c(1, 0.5)  # adjust height ratio as needed
+)
+```
+
 

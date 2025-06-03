@@ -43,49 +43,104 @@ for (i in seq_along(protein_chunks)) {
 
 https://services.healthtech.dtu.dk/services/BepiPred-2.0/ 
 ```{r}
-data_BepiPred_2 <- rbind(
+data_BepiPred_2_raw <- rbind(
     read_csv("output/BepiPred2.0/BepiPred_part1_summary_67C1B456000FBFBBD072AA59.csv"),
     read_csv("output/BepiPred2.0/BepiPred_part2_summary_67C1B4C8000FC0D59FA5D3FB.csv"),
-    read_csv("output/BepiPred2.0/BepiPred_part3_summary_681B08A3001AD0BAAA45311C.csv")
+    read_csv("output/BepiPred2.0/BepiPred_part3_summary_681B08A3001AD0BAAA45311C.csv"),
+    read_csv("output/BepiPred2.0/BepiPred_vws_summary_68358292003BC30E33A4DFA1.csv")
     ) 
+
+data_BepiPred_2 <- data_BepiPred_2_raw %>%
+  mutate(
+    PDB = case_when(
+      Entry %in% data_namesclasspdb$PDB ~ Entry,
+      TRUE ~ NA
+    ),
+    protein = case_when(
+     !is.na(PDB) ~ 
+        data_namesclasspdb$protein[match(PDB, data_namesclasspdb$PDB)],
+      !is.na(match(tolower(Entry), tolower(data_namesclasspdb$protein))) ~
+        data_namesclasspdb$protein[match(tolower(Entry), tolower(data_namesclasspdb$protein))],
+      !is.na(match(tolower(Entry), tolower(data_namesclasspdb$TIGR4_name))) ~
+       data_namesclasspdb$protein[match(tolower(Entry), tolower(data_namesclasspdb$TIGR4_name))],
+      TRUE ~ data_namesclasspdb$TIGR4_name[match(tolower(Entry), tolower(data_namesclasspdb$TIGR4_name))]
+    )
+  ) %>%
+  left_join(
+    data_namesclasspdb, by = c("protein","PDB")
+  )
+data_BepiPred_2
 ```
+
 
 ## Generalized
 ### get valid all pdb entires and files
 ```{r}
-pdbs_path = "data/pdb/"
-
 pdb_files_list <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
 
-pdb_files_list
+AF3_pdb_files_list <- list.files(AF3_pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
 ```
 
 ## BepiPred-2.0 with resno
 ```{r}
 data_BepiPred_2_with_resno <- NULL
 
-for (pdb_entry in pdb_files_list) {
-  print(pdb_entry)
+for (i in seq_len(nrow(data_namesclasspdb))) {
+  protein_indexed <- data_namesclasspdb$protein[i]
+  pdb_entry <- data_namesclasspdb$PDB[i]
+  TIGR4_entry <- data_namesclasspdb$TIGR4_name[i]
   
-  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
-  
-  required_adjustment <- map.seqresno.to.resno(pdb_object)
-  #print(required_adjustment)
-  
-  resmap <- create.resmap(pdb_object$atom, 
-                                           data_BepiPred_2 %>% filter(Entry == pdb_entry),
-                                           required_adjustment)
+  if (!is.na(pdb_entry)) {
+    
+    print(paste("Processing", protein_indexed, "-", pdb_entry))
+    
+    pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+    
+    required_adjustment <- map.seqresno.to.resno(pdb_object)
+    #print(required_adjustment)
+    
+    resmap <- create.resmap(pdb_object$atom, 
+                            data_BepiPred_2 %>% filter(Entry == pdb_entry),
+                            required_adjustment)
+  } else {
+    match_idx <- grep(paste0("^", tolower(protein_indexed), "_model_\\d+_fold_\\d+"), tolower(AF3_pdb_files_list))
+    
+    if (length(match_idx) == 0) {
+      warning(paste("No model found for protein: ", protein_indexed, "retrying using TIGR4 name \n"))
+      
+      match_idx <- grep(paste0("^", tolower(TIGR4_entry), "_model_\\d+_fold_\\d+"), tolower(AF3_pdb_files_list))
+      if (length(match_idx) == 0) {
+        warning(paste("No model found for protein: ", protein_indexed, "or TIGR4 name: ", TIGR4_entry, "\n"))
+        next
+      }
+    }
+    
+    print(paste("Processing", protein_indexed, "-", AF3_pdb_files_list[match_idx]))
+    
+    pdb_object <- read.pdb.custom(pdb_entry = AF3_pdb_files_list[match_idx], pdb_path = AF3_pdbs_path)
+    
+    required_adjustment <- 0
+    
+    resmap <- create.resmap(
+      pdb_object$atom, 
+      data_BepiPred_2 %>% filter(protein == protein_indexed),
+      required_adjustment
+    )
+    
+  }
   
   if (is.null(data_BepiPred_2_with_resno)) {
     data_BepiPred_2_with_resno <- resmap
   } else {
     # Otherwise, rbind the current data to the combined data frame
-    data_BepiPred_2_with_resno <- rbind(data_BepiPred_2_with_resno, resmap)
+    data_BepiPred_2_with_resno <- bind_rows(data_BepiPred_2_with_resno, resmap)
   }
 }
 
 data_BepiPred_2_with_resno
 ```
+
+
 
 ## Store results as csv
 ```{r}
@@ -94,43 +149,96 @@ write.csv(data_BepiPred_2_with_resno,
           row.names = FALSE)
 ```
 
-
-
 # BepiPred-3.0 results
 https://services.healthtech.dtu.dk/services/BepiPred-3.0/
 
 ```{r}
-data_BepiPred_3 <- rbind(
+data_BepiPred_3_raw <- rbind(
     read_csv("output/BepiPred3.0/raw_output_part1_0228.csv"),
     read_csv("output/BepiPred3.0/raw_output_part2_0228.csv"),
-    read_csv("output/BepiPred3.0/raw_output_part3.csv")
-    ) %>%
-  #mutate(Residue = aa123(Residue)) %>%
+    read_csv("output/BepiPred3.0/raw_output_part3.csv"),
+    read_csv("output/BepiPred3.0/raw_output_vws.csv")
+    )
+
+data_BepiPred_3 <- data_BepiPred_3_raw %>%
+  mutate(Residue = aa123(Residue)) %>%
   group_by(Accession) %>%
-  mutate(Position = row_number())
+  mutate(Position = row_number()) %>%
+  ungroup() %>%
+  mutate(
+    PDB = case_when(
+      Accession %in% data_namesclasspdb$PDB ~ Accession,
+      TRUE ~ NA
+    ),
+    protein = case_when(
+     !is.na(PDB) ~ 
+        data_namesclasspdb$protein[match(PDB, data_namesclasspdb$PDB)],
+      !is.na(match(tolower(Accession), tolower(data_namesclasspdb$protein))) ~
+        data_namesclasspdb$protein[match(tolower(Accession), tolower(data_namesclasspdb$protein))],
+      !is.na(match(tolower(Accession), tolower(data_namesclasspdb$TIGR4_name))) ~
+       data_namesclasspdb$protein[match(tolower(Accession), tolower(data_namesclasspdb$TIGR4_name))],
+      TRUE ~ data_namesclasspdb$TIGR4_name[match(tolower(Accession), tolower(data_namesclasspdb$TIGR4_name))]
+    )
+  ) %>%
+  left_join(
+    data_namesclasspdb, by = c("protein","PDB")
+  )
+
+data_BepiPred_3
 ```
 
 ## BepiPred-3.0 with resno
 ```{r}
 data_BepiPred_3_with_resno <- NULL
 
-for (pdb_entry in pdb_files_list) {
-  print(pdb_entry)
+for (i in seq_len(nrow(data_namesclasspdb))) {
+  protein_indexed <- data_namesclasspdb$protein[i]
+  pdb_entry <- data_namesclasspdb$PDB[i]
+  TIGR4_entry <- data_namesclasspdb$TIGR4_name[i]
   
-  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
-  
-  required_adjustment <- map.seqresno.to.resno(pdb_object)
-  #print(required_adjustment)
-  
-  resmap <- create.resmap(pdb_object$atom, 
-                                           data_BepiPred_3 %>% filter(Accession == pdb_entry),
-                                           required_adjustment)
+  if (!is.na(pdb_entry)) {
+    
+    print(paste("Processing", protein_indexed, "-", pdb_entry))
+    
+    pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+    
+    required_adjustment <- map.seqresno.to.resno(pdb_object)
+    #print(required_adjustment)
+    
+    resmap <- create.resmap(pdb_object$atom, 
+                            data_BepiPred_3 %>% filter(Accession == pdb_entry),
+                            required_adjustment)
+  } else {
+    match_idx <- grep(paste0("^", tolower(protein_indexed), "_model_\\d+_fold_\\d+"), tolower(AF3_pdb_files_list))
+    
+    if (length(match_idx) == 0) {
+      warning(paste("No model found for protein: ", protein_indexed, "retrying using TIGR4 name \n"))
+      
+      match_idx <- grep(paste0("^", tolower(TIGR4_entry), "_model_\\d+_fold_\\d+"), tolower(AF3_pdb_files_list))
+      if (length(match_idx) == 0) {
+        warning(paste("No model found for protein: ", protein_indexed, "or TIGR4 name: ", TIGR4_entry, "\n"))
+        next
+      }
+    }
+    print(paste("Processing", protein_indexed, "-", AF3_pdb_files_list[match_idx]))
+    
+    pdb_object <- read.pdb.custom(pdb_entry = AF3_pdb_files_list[match_idx], pdb_path = AF3_pdbs_path)
+    
+    required_adjustment <- 0
+    
+    resmap <- create.resmap(
+      pdb_object$atom, 
+      data_BepiPred_3 %>% filter(protein == protein_indexed),
+      required_adjustment
+    )
+    
+  }
   
   if (is.null(data_BepiPred_3_with_resno)) {
     data_BepiPred_3_with_resno <- resmap
   } else {
     # Otherwise, rbind the current data to the combined data frame
-    data_BepiPred_3_with_resno <- rbind(data_BepiPred_3_with_resno, resmap)
+    data_BepiPred_3_with_resno <- bind_rows(data_BepiPred_3_with_resno, resmap)
   }
 }
 
@@ -149,32 +257,63 @@ https://services.healthtech.dtu.dk/services/DiscoTope-3.0/
 ```{r}
 csv_files <- list.files("output/DiscoTope/individual_files/", pattern = "*.csv", full.names = TRUE)
 
-data_DiscoTope <- NULL
+data_DiscoTope_raw <- NULL
 
 for (csv_file in csv_files) {
-  print(csv_file)
+  #print(csv_file)
   
-  pdb_id <- str_extract(basename(csv_file), "^[^_]+") 
+  file_id <- str_extract(basename(csv_file), "^(.*)(?=_[A-Z]_discotope3\\.csv)")
   
-  temp_data <- read_csv(csv_file, show_col_types = FALSE)
-  
-  temp_data <- temp_data %>%
-    mutate(pdb = pdb_id,
-           resno = res_id)
+  temp_data <- read_csv(csv_file, show_col_types = FALSE) #%>%
+   # mutate(file_id = file_id)
 
-  if (is.null(data_DiscoTope)) {
-    data_DiscoTope <- temp_data
+  if (is.null(data_DiscoTope_raw)) {
+    data_DiscoTope_raw <- temp_data
   } else {
-    data_DiscoTope <- rbind(data_DiscoTope, temp_data)
+    data_DiscoTope_raw <- rbind(data_DiscoTope_raw, temp_data)
   }
 }
+
+data_DiscoTope_raw
+```
+
+```{r}
+data_DiscoTope <- data_DiscoTope_raw %>%
+  mutate(
+    resno = res_id,
+    
+    resid = aa123(residue),
+    
+    file_id = sub("_[^_]+$", "", pdb),
+    
+    PDB = case_when(
+      file_id %in% data_namesclasspdb$PDB ~ file_id,
+      TRUE ~ NA
+    ),
+    
+    model_id = case_when(
+      !is.na(PDB) ~ NA,
+      TRUE ~ str_extract(file_id, "^(.*?)(?=_model_)")
+    ),
+    
+    protein = case_when(
+      !is.na(PDB) ~ 
+        data_namesclasspdb$protein[match(PDB, data_namesclasspdb$PDB)],
+      !is.na(match(tolower(model_id), tolower(data_namesclasspdb$protein))) ~
+        data_namesclasspdb$protein[match(tolower(model_id), tolower(data_namesclasspdb$protein))],
+      !is.na(match(tolower(model_id), tolower(data_namesclasspdb$TIGR4_name))) ~
+        data_namesclasspdb$protein[match(tolower(model_id), tolower(data_namesclasspdb$TIGR4_name))],
+      TRUE ~ data_namesclasspdb$TIGR4_name[match(tolower(model_id), tolower(data_namesclasspdb$TIGR4_name))]
+    )
+  ) %>%
+  select(-pdb, -res_id, -file_id, -model_id) %>%
+  left_join(
+    data_namesclasspdb, by = c("protein","PDB")
+  )
 
 data_DiscoTope
 ```
 
-```{r}
-data_DiscoTope %>% pull(pdb) %>% unique()
-```
 ## Store results as csv
 ```{r}
 write.csv(data_DiscoTope,
@@ -196,48 +335,55 @@ epigraph_csv_files
 ```
 
 ```{r}
-data_Epigraph <- NULL
+data_Epigraph_raw <- NULL
 
 for (csv_file in epigraph_csv_files) {
   temp_data <- read_csv(paste0("output/EpiGraph/individual_files/",csv_file), show_col_types = FALSE) 
   print(csv_file)
   
-  if (is.null(data_Epigraph)) {
-    data_Epigraph <- temp_data
+  if (is.null(data_Epigraph_raw)) {
+    data_Epigraph_raw <- temp_data
   } else {
     # Otherwise, rbind the current data to the combined data frame
-    data_Epigraph <- rbind(data_Epigraph, temp_data)
+    data_Epigraph_raw <- rbind(data_Epigraph_raw, temp_data)
   }
 }
 
-data_Epigraph <- data_Epigraph %>% 
+data_Epigraph <- data_Epigraph_raw %>% 
   separate(Residue, into = c("chain", "resid", "resno"), sep = ":", convert = TRUE) %>%
-  mutate(PDB = toupper(PDB))
-
-data_Epigraph
+  mutate(file_id = PDB) %>%
+  select(-PDB) %>%
+  mutate(
+    PDB = case_when(
+      toupper(file_id) %in% data_namesclasspdb$PDB ~ toupper(file_id),
+      TRUE ~ NA
+    ),
+    
+    model_id = case_when(
+      !is.na(PDB) ~ NA,
+      TRUE ~ str_extract(file_id, "^(.*?)(?=_model_)")
+    ),
+    
+    protein = case_when(
+      !is.na(PDB) ~ 
+        data_namesclasspdb$protein[match(PDB, data_namesclasspdb$PDB)],
+      !is.na(match(tolower(model_id), tolower(data_namesclasspdb$protein))) ~
+        data_namesclasspdb$protein[match(tolower(model_id), tolower(data_namesclasspdb$protein))],
+      !is.na(match(tolower(model_id), tolower(data_namesclasspdb$TIGR4_name))) ~
+        data_namesclasspdb$protein[match(tolower(model_id), tolower(data_namesclasspdb$TIGR4_name))],
+      TRUE ~ data_namesclasspdb$TIGR4_name[match(tolower(model_id), tolower(data_namesclasspdb$TIGR4_name))]
+    )
+  ) %>%
+  select(-file_id, -model_id) %>%
+  left_join(
+    data_namesclasspdb, by = c("protein","PDB")
+  )
+  
+data_Epigraph %>% filter(is.na(PDB))
 ```
 
 ```{r}
-data_Epigraph %>% pull(PDB) %>% unique()
-```
-
-
-```{r}
-data_Epigraph_subset <- data_Epigraph %>% filter(PDB == "2BIB")
-
-plot_epigraph <- data_Epigraph_subset %>% 
-    ggplot(aes(x=resno, y=Score, fill=Score)) +
-    geom_col(width = 1,) +
-    scale_fill_gradient2(low = "blue", mid = "gray95", high = "red") +  
-    theme_minimal() + 
-    theme(
-      axis.text.y = element_blank(),   
-      axis.title.y = element_blank(),  
-      axis.ticks.y = element_blank()
-    ) +
-    labs(fill = "EpiGraph prediction")
-
-plot_epigraph
+data_Epigraph %>% pull(protein) %>% unique()
 ```
 
 ## Store results as csv
@@ -424,212 +570,9 @@ data_interpro %>%
   pivot_wider(names_from = Analysis, values_from = Score, values_fill = NA)
 ```
 
-
-
-```{r, fig.width=14}
-data_interpro %>%
-  filter(Protein_accession == "2BIB") %>%
-  mutate(id = row_number()) %>%
-  ggplot() +
-  geom_segment(
-    aes(
-      x = Start, xend = End,
-      y = Signature_description, yend = Signature_description,
-      color = InterPro_description,
-    ),
-    size=8
-  ) +
-  theme_bw() +
-  labs(
-    x = "Amino acid position",
-    y = "Signature description"
-  )
-
-data_interpro %>%
-  filter(Protein_accession == "2BIB") %>%
-  mutate(id = row_number()) %>%
-  ggplot() +
-  geom_segment(
-    aes(
-      x = Start, xend = End,
-      y = InterPro_description, yend = InterPro_description,
-      color = Signature_description,
-    ),
-    size=8
-  ) +
-  theme_bw() +
-  labs(
-    x = "Amino acid position",
-    y = "InterPro description"
-  )
-
-data_interpro %>%
-  filter(Protein_accession == "2BIB") %>%
-  mutate(id = row_number()) %>%
-  ggplot() +
-  geom_segment(
-    aes(
-      x = Start, xend = End,
-      y = Analysis, yend = Analysis,
-      color = Signature_description,
-    ),
-    size=8
-  ) +
-  theme_bw() +
-  labs(
-    x = "Amino acid position",
-    y = "Analysis method"
-  )
-
-data_interpro %>%
-  filter(Protein_accession == "2BIB") %>%
-  mutate(id = row_number()) %>%
-  ggplot() +
-  geom_segment(
-    aes(
-      x = Start, xend = End,
-      y = Analysis, yend = Analysis,
-      color = InterPro_description,
-    ),
-    size=8
-  ) +
-  theme_bw() +
-  labs(
-    x = "Amino acid position",
-    y = "Analysis method"
-  )
-
-data_interpro %>%
-  filter(Protein_accession == "2BIB") %>%
-  mutate(id = row_number(),
-         Score = as.numeric(Score)) %>%
-  ggplot() +
-  geom_segment(
-    aes(
-      x = Start, xend = End,
-      y = -log10(Score), yend = -log10(Score),
-      color = interaction(Analysis,InterPro_description),
-    ),
-    size=8
-  ) +
-  theme_bw() +
-  labs(
-    x = "Amino acid position",
-    y = "Significance"
-  )
-```
-
-```{r, fig.width=14}
-data_interpro %>%
-  filter(Analysis == "SUPERFAMILY") %>%
-  arrange(Protein_accession) %>%
-  ggplot() +
-  geom_segment(
-    aes(
-      x = Start, xend = End,
-      y = Protein_accession, yend = Protein_accession,
-      color = Signature_description,
-    ),
-    size=4
-  ) +
-  theme_bw() +
-  labs(
-    x = "Amino acid position",
-    y = "Analysis method"
-  )
-
-data_interpro %>%
-  arrange(Protein_accession) %>%
-  ggplot() +
-  geom_segment(
-    aes(
-      x = Start, xend = End,
-      y = Protein_accession, yend = Protein_accession,
-      color = InterPro_description,
-    ),
-    size=4
-  ) +
-  theme_bw() +
-  labs(
-    x = "Amino acid position",
-    y = "Analysis method"
-  )
-```
-
-```{r fig.width=14}
-for (protein in sort(unique(data_interpro$Protein_accession))) {
-  print(protein)
-  
-  data_interpro_subset <- data_interpro %>%
-    filter(Protein_accession == protein) %>%
-    pivot_longer(
-      cols = c(Signature_description, InterPro_description),
-      names_to = "Description_type",
-      values_to = "Description"
-    )
-  
-  plot <- data_interpro_subset %>%
-  ggplot() +
-  geom_segment(
-    aes(
-      x = Start, xend = End,
-      y = Analysis, yend = Analysis,
-      color = Description,
-    ),
-    size=8
-  ) +
-  facet_wrap(~ Description_type) +
-  theme_bw() +
-  labs(
-    title = paste0("Domains in ", protein),
-    x = "Amino acid position",
-    y = "Analysis method"
-  )
-  
-  print(plot)
-}
-```
-
-```{r, fig.width=14}
-for (protein in sort(unique(data_interpro$Protein_accession))) {
-  
-  data_interpro_subset <- data_interpro %>%
-    filter(Protein_accession == protein) %>%
-    pivot_longer(
-      cols = c(Signature_description, InterPro_description),
-      names_to = "Description_type",
-      values_to = "Description"
-    ) %>%
-    filter(!is.na(Description) & Description != "-") %>%
-    mutate(
-      combination = interaction(Description_type, Analysis)
-    )
-
-  # Use numeric y_pos for small vertical shifts
-  plot <- ggplot(data_interpro_subset) +
-    geom_segment(
-      aes(x = Start, xend = End,
-          y = -log10(Score), yend = -log10(Score),
-          group = combination,
-          color = Description),
-      size = 5
-    ) +
-    #scale_y_continuous(
-    #  breaks = unique(as.numeric(factor(data_interpro_subset$Analysis))),
-    #  labels = levels(factor(data_interpro_subset$Analysis))
-    #) +
-    labs(
-      title = paste0("Protein: ", protein),
-      x = "Amino acid position",
-      y = "E-value"
-    ) +
-    theme_minimal() 
-
-  print(plot)
-}
-```
-
 ```{r, fig.width=14, warning=FALSE}
+charweight = 0.3
+
 for (protein in sort(unique(data_interpro$Protein_accession))) {
   print(protein)
   
@@ -642,15 +585,26 @@ for (protein in sort(unique(data_interpro$Protein_accession))) {
              TRUE ~ Signature_description
              )
            ) %>%
+    filter(!is.na(Description) & Description != "-") %>%
     # Calculate the max e_value for each Analysis group and reorder Analysis factor
     group_by(Analysis) %>%
     mutate(max_e_value = max(e_value, na.rm = TRUE)) %>%
+    
     ungroup() %>%
     mutate(Analysis = factor(Analysis, levels = unique(Analysis[order(max_e_value)]))) %>%
     select(-max_e_value)  # Remove max_e_value column
   
   plot <- data_interpro_subset %>%
-    filter(!is.na(Description) & Description != "-") %>%
+    group_by(Analysis,Description) %>%
+    mutate(
+      x_midpoint = Start + (End - Start)/2,
+      min_start = min(Start),
+      max_end = max(End),
+      group_midpoint = min_start + (max_end - min_start)/2,
+      size_calc = (End - Start)/(nchar(Description)*charweight),
+      group_size_calc = (max_end - min_start)/(nchar(Description)*charweight) 
+        
+    ) %>%
     ggplot() +
     geom_segment(
       aes(
@@ -660,6 +614,30 @@ for (protein in sort(unique(data_interpro$Protein_accession))) {
         alpha = e_value
       ),
       size = 8
+    ) +
+    geom_text(
+      aes(
+        x = ifelse(
+          size_calc >= 5,
+          x_midpoint,
+          group_midpoint
+        ),
+        y = Analysis,
+        color = Description, 
+        label = Description,
+        #size = ifelse(
+        #  size_calc >= 5,
+        #  pmin(size_calc, 0.1),
+        #  pmin(group_size_calc, 0.1)
+        #)
+        size = ifelse(
+          size_calc >= 5,
+          pmin(size_calc/100, 0.1),
+          pmin(pmax(group_size_calc/100,0.05), 0.1)
+        )
+      ),
+      color = "black",
+      show.legend = FALSE
     ) +
     scale_alpha_continuous() +
     theme_bw() +
@@ -679,8 +657,12 @@ for (protein in sort(unique(data_interpro$Protein_accession))) {
 We want to build up annotation, using the most significant (based on E-value) non-overlapping domain hits
 
 ```{r}
+Analysis_selection <- c(
+  
+)
+
 data_interpro %>%
-  #filter(Protein_accession == "2BIB") %>%
+  filter(Analysis %in% Analysis_selection) %>%
   group_by(Protein_accession) %>%
   mutate(Description = case_when(
              InterPro_description != "-" ~ InterPro_description,
@@ -745,6 +727,7 @@ filtered_hits <- data_interpro %>%
   ungroup()
 
 filtered_hits
+
 ```
 
 ```{r}
@@ -759,7 +742,26 @@ data_interpro_filtered <- data_interpro %>%
   filter(!is.na(Description), Description != "-") %>%
   arrange(Protein_accession, Score) %>%
   group_modify(~ keep_non_overlapping(.x)) %>%
-  select(Protein_accession, Sequence_length, Analysis, )
+  select(Protein_accession, Sequence_length, Start, End, Description, Analysis, e_value, Score) %>%
+  ungroup()
+
+data_interpro_filtered
+```
+
+```{}
+data_interpro_filtered <- data_interpro %>%
+  group_by(Protein_accession) %>%
+  mutate(Description = case_when(
+             InterPro_description == "-" ~ Signature_description,
+             is.na(InterPro_description) ~ Signature_description,
+             TRUE ~ InterPro_description
+             )
+         ) %>%
+  filter(!is.na(Description), Description != "-",
+         Analysis == "Pfam") %>%
+  arrange(Protein_accession, Score) %>%
+  group_modify(~ keep_non_overlapping(.x)) %>%
+  select(Protein_accession, Sequence_length, Analysis)
   ungroup()
 
 data_interpro_filtered

@@ -43,6 +43,8 @@ data_proteinpanel <- rbind(
 data_proteinpanel
 ```
 
+
+
 ## Create fasta    
 ```{r}
 fasta_content <- apply(data_proteinpanel, 1, function(row) {
@@ -59,7 +61,7 @@ cat(fasta_content)
 #Data structural
 ##loading
 ```{r}
-data_structural <- read_xlsx("data/Pneumoproteins_PDB_structuralData.xlsx") %>%
+data_structural <- read_xlsx("data/Pneumoproteins_PDB_structuralData_updated.xlsx") %>%
   rename_at(vars(3, 4), ~ c("Proteins (TIGR4) name", "Proteins (TIGR4)")) %>%
   mutate(
     "Protein class" = case_when(
@@ -75,6 +77,10 @@ data_structural <- read_xlsx("data/Pneumoproteins_PDB_structuralData.xlsx") %>%
   )
 
 data_structural  
+```
+
+```{r}
+data_structural %>% filter(is.na(`PDB entry`)) %>% pull(`Proteins (TIGR4) name`)
 ```
 
 
@@ -131,36 +137,21 @@ for(pdb_entry in pdb_downloads) {
     next
   }
   
-  if (exists("seqres", where = pdb_object)) {
-    # If seqres exists, use the fasta sequence extraction process
-    fasta_sequence <- pdb_object$seqres %>%
-      enframe(name = "chain", value = "resid") %>%
-      add_count(chain, name = "chain_length") %>%
-      group_by(chain) %>%
-      mutate(resid = aa321(resid),
-             position = row_number()) %>%
-      filter(resid %in% names(AMINO_ACID_CODE)[1:20]) %>%
-      arrange(desc(chain_length), chain) %>%
-      filter(chain_length == max(chain_length)) %>%
-      filter(chain == min(chain)) %>%  # In case of tie, choose lowest alphabetically
-      pull(resid) %>%
-      str_c(collapse = "")
-  } else {
-    print("no seqres in pdb, will take sequence from atom")
-    # If seqres does not exist, use atom data
-    fasta_sequence <- pdb_object$atom %>%
-      filter(type == "ATOM",
-             elety == "CA",
-             alt %in% c(NA, "A"),
-             resid %in% toupper(AMINO_ACID_CODE)[1:20]) %>%
-      add_count(chain, name = "chain_length") %>%
-      arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
-      filter(chain_length == max(chain_length)) %>%
-      filter(chain == min(chain)) %>%
-      pull(resid) %>%
-      aa321() %>%
-      str_c(collapse = "")
-  }
+  
+  # Use atom data
+  fasta_sequence <- pdb_object$atom %>%
+    filter(type == "ATOM",
+           elety == "CA",
+           alt %in% c(NA, "A"),
+           resid %in% toupper(AMINO_ACID_CODE)[1:20]) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+    filter(chain_length == max(chain_length)) %>%
+    filter(chain == min(chain)) %>%
+    pull(resid) %>%
+    aa321() %>%
+    str_c(collapse = "")
+  
   
   fasta_content <- paste0(">", pdb_entry, "\n", fasta_sequence)
   
@@ -179,6 +170,37 @@ missing_fasta <- setdiff(pdb_downloads,
 
 missing_fasta
 ```
+
+# Match proteinpanel to structural 
+names are not consistent between the structural and protein panel data, so they have to be cleaned
+```{r}
+data_namesclasspdb <- data_structural %>%
+  separate_rows(`PDB entry`, sep = ", ") %>%
+  mutate(PDB = `PDB entry`,
+         structure_proteinname = `Proteins (TIGR4) name`,
+         structure_proteinname_clean = ifelse(
+           grepl("^SP_", gsub(" ", "", gsub("\\(.*", "", `Proteins (TIGR4) name`))), 
+           sub("^(SP_\\d{4}).*", "\\1", gsub(" ", "", gsub("\\(.*", "", `Proteins (TIGR4) name`))),
+           sub("_.*", "", gsub(" ", "", gsub("\\(.*", "", `Proteins (TIGR4) name`)))
+         ),
+         TIGR4_name = `Proteins (TIGR4)`
+  ) %>%
+  select(structure_proteinname_clean, PDB, TIGR4_name) %>%
+  full_join(
+    data_proteinpanel %>% 
+      mutate(panel_proteinname = `Proteins (TIGR4)`,
+             panel_proteinname_clean = gsub(" ","",gsub("\\(.*", "", panel_proteinname)),
+             proteinclass = `Protein class`
+      ) %>%
+      select(proteinclass, panel_proteinname_clean, core_genome), keep = TRUE,
+    by = c("structure_proteinname_clean" = "panel_proteinname_clean")
+  ) %>%
+  mutate(protein = structure_proteinname_clean) %>%
+  select(proteinclass, protein, TIGR4_name, PDB, core_genome)
+
+data_namesclasspdb
+```
+
 
 # Data structural long format with title 
 ```{r}
@@ -220,3 +242,4 @@ write.csv(data_structural_long,
           "data/Pneumoproteins_PDB_structuralData_long.csv", 
           row.names=FALSE)
 ```
+
