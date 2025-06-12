@@ -83,6 +83,9 @@ data_structural
 data_structural %>% filter(is.na(`PDB entry`)) %>% pull(`Proteins (TIGR4) name`)
 ```
 
+```{r}
+data_structural %>% filter(New == "Yes")
+```
 
 
 ## download all pdb's
@@ -123,6 +126,7 @@ pdb_missing <- setdiff(pdb_download_list, pdb_downloads)
 pdb_missing
 ```
 
+
 #Convert pdb to fasta
 ```{r}
 fasta_content_list <- c() 
@@ -137,21 +141,32 @@ for(pdb_entry in pdb_downloads) {
     next
   }
   
-  
-  # Use atom data
-  fasta_sequence <- pdb_object$atom %>%
-    filter(type == "ATOM",
-           elety == "CA",
-           alt %in% c(NA, "A"),
-           resid %in% toupper(AMINO_ACID_CODE)[1:20]) %>%
-    add_count(chain, name = "chain_length") %>%
-    arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
-    filter(chain_length == max(chain_length)) %>%
-    filter(chain == min(chain)) %>%
-    pull(resid) %>%
-    aa321() %>%
-    str_c(collapse = "")
-  
+  if(!is.null(pdb_object$seqres)) { #use seqres
+    fasta_sequence <- pdb_object$seqres %>% enframe(name = "chain", value = "resid") %>%
+      add_count(chain, name = "chain_length") %>%
+      arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+      filter(chain_length == max(chain_length)) %>%
+      filter(chain == min(chain)) %>%
+      pull(resid) %>%
+      aa321() %>%
+      str_c(collapse = "")
+    
+  } else { # Use atom data
+    message("No seqres, using atom data")
+    
+    fasta_sequence <- pdb_object$atom %>%
+      filter(type == "ATOM",
+             elety == "CA",
+             alt %in% c(NA, "A"),
+             resid %in% toupper(AMINO_ACID_CODE)[1:20]) %>%
+      add_count(chain, name = "chain_length") %>%
+      arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+      filter(chain_length == max(chain_length)) %>%
+      filter(chain == min(chain)) %>%
+      pull(resid) %>%
+      aa321() %>%
+      str_c(collapse = "")
+  }
   
   fasta_content <- paste0(">", pdb_entry, "\n", fasta_sequence)
   
@@ -162,6 +177,7 @@ for(pdb_entry in pdb_downloads) {
 fasta_content_list %>% 
   writeLines("data/fasta/pdb_protein_sequences.fasta")
 ```
+
 
 ## check for missing fasta's
 ```{r}

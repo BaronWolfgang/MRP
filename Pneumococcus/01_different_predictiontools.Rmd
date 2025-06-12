@@ -44,9 +44,8 @@ for (i in seq_along(protein_chunks)) {
 https://services.healthtech.dtu.dk/services/BepiPred-2.0/ 
 ```{r}
 data_BepiPred_2_raw <- rbind(
-    read_csv("output/BepiPred2.0/BepiPred_part1_summary_67C1B456000FBFBBD072AA59.csv"),
-    read_csv("output/BepiPred2.0/BepiPred_part2_summary_67C1B4C8000FC0D59FA5D3FB.csv"),
-    read_csv("output/BepiPred2.0/BepiPred_part3_summary_681B08A3001AD0BAAA45311C.csv"),
+    read_csv("output/BepiPred2.0/BepiPred_part1_summary_684033E6001F9BFB3C151E32.csv"),
+    read_csv("output/BepiPred2.0/BepiPred_part2_summary_684034B0001F9E18B0E5074D.csv"),
     read_csv("output/BepiPred2.0/BepiPred_vws_summary_68358292003BC30E33A4DFA1.csv")
     ) 
 
@@ -96,12 +95,9 @@ for (i in seq_len(nrow(data_namesclasspdb))) {
     
     pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
     
-    required_adjustment <- map.seqresno.to.resno(pdb_object)
-    #print(required_adjustment)
+    data_BepiPred_2_subset <- data_BepiPred_2 %>% 
+      filter(Entry == pdb_entry)
     
-    resmap <- create.resmap(pdb_object$atom, 
-                            data_BepiPred_2 %>% filter(Entry == pdb_entry),
-                            required_adjustment)
   } else {
     match_idx <- grep(paste0("^", tolower(protein_indexed), "_model_\\d+_fold_\\d+"), tolower(AF3_pdb_files_list))
     
@@ -119,15 +115,60 @@ for (i in seq_len(nrow(data_namesclasspdb))) {
     
     pdb_object <- read.pdb.custom(pdb_entry = AF3_pdb_files_list[match_idx], pdb_path = AF3_pdbs_path)
     
-    required_adjustment <- 0
-    
-    resmap <- create.resmap(
-      pdb_object$atom, 
-      data_BepiPred_2 %>% filter(protein == protein_indexed),
-      required_adjustment
-    )
-    
+    data_BepiPred_2_subset <- data_BepiPred_2 %>% 
+      mutate(Entry = tolower(Entry)) %>%
+      filter(
+        is.na(PDB),
+        Entry == tolower(protein_indexed) | Entry == tolower(TIGR4_entry)
+      )
+  
   }
+  
+  bepipred2_seqres <- data_BepiPred_2_subset %>% 
+    pull(AminoAcid) %>%
+    str_c(collapse = "") %>%
+    AAString()
+  
+  ca_atoms_reconstructed <- reconstruct.ca_atoms(pdb_object)
+  pdb_seqres <- ca_atoms_reconstructed %>%
+    pull(seqres_resid) %>%
+    aa321() %>%
+    str_c(collapse = "") %>%
+    AAString()
+  
+  alignment <- pairwiseAlignment(
+    pattern = pdb_seqres,
+    subject = bepipred2_seqres
+  )
+  
+  aligned_seqres <- as.character(alignedPattern(alignment))
+  aligned_bepipred2_seqres <- as.character(alignedSubject(alignment))
+  
+  alignment_df <- tibble(
+    seqres_resid = strsplit(aligned_seqres, "")[[1]],
+    bepipred2_resid = strsplit(aligned_bepipred2_seqres, "")[[1]],
+  ) %>%
+    mutate(
+      seqresno = row_number(),
+      Position = case_when(
+        bepipred2_resid != "-" ~ cumsum(bepipred2_resid != "-"),
+        TRUE ~ NA
+      ),
+      seqres_resid = aa123(seqres_resid)
+    ) %>%
+    left_join(
+      ca_atoms_reconstructed,
+      by = c("seqresno", "seqres_resid")
+      )
+  
+  resmap <- alignment_df %>%
+    left_join(
+      data_BepiPred_2_subset,
+      by = c(
+        "Position",
+        "bepipred2_resid" = "AminoAcid"
+             )
+    ) 
   
   if (is.null(data_BepiPred_2_with_resno)) {
     data_BepiPred_2_with_resno <- resmap
@@ -139,8 +180,6 @@ for (i in seq_len(nrow(data_namesclasspdb))) {
 
 data_BepiPred_2_with_resno
 ```
-
-
 
 ## Store results as csv
 ```{r}
@@ -154,9 +193,8 @@ https://services.healthtech.dtu.dk/services/BepiPred-3.0/
 
 ```{r}
 data_BepiPred_3_raw <- rbind(
-    read_csv("output/BepiPred3.0/raw_output_part1_0228.csv"),
-    read_csv("output/BepiPred3.0/raw_output_part2_0228.csv"),
-    read_csv("output/BepiPred3.0/raw_output_part3.csv"),
+    read_csv("output/BepiPred3.0/raw_output_part1.csv"),
+    read_csv("output/BepiPred3.0/raw_output_part2.csv"),
     read_csv("output/BepiPred3.0/raw_output_vws.csv")
     )
 
@@ -187,6 +225,11 @@ data_BepiPred_3 <- data_BepiPred_3_raw %>%
 data_BepiPred_3
 ```
 
+```{r}
+data_BepiPred_3 %>% filter(PDB == "3CX3")
+```
+
+
 ## BepiPred-3.0 with resno
 ```{r}
 data_BepiPred_3_with_resno <- NULL
@@ -202,12 +245,9 @@ for (i in seq_len(nrow(data_namesclasspdb))) {
     
     pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
     
-    required_adjustment <- map.seqresno.to.resno(pdb_object)
-    #print(required_adjustment)
-    
-    resmap <- create.resmap(pdb_object$atom, 
-                            data_BepiPred_3 %>% filter(Accession == pdb_entry),
-                            required_adjustment)
+    data_BepiPred_3_subset <- data_BepiPred_3 %>% 
+      filter(Accession == pdb_entry)
+                          
   } else {
     match_idx <- grep(paste0("^", tolower(protein_indexed), "_model_\\d+_fold_\\d+"), tolower(AF3_pdb_files_list))
     
@@ -220,19 +260,66 @@ for (i in seq_len(nrow(data_namesclasspdb))) {
         next
       }
     }
+    
     print(paste("Processing", protein_indexed, "-", AF3_pdb_files_list[match_idx]))
     
     pdb_object <- read.pdb.custom(pdb_entry = AF3_pdb_files_list[match_idx], pdb_path = AF3_pdbs_path)
     
-    required_adjustment <- 0
-    
-    resmap <- create.resmap(
-      pdb_object$atom, 
-      data_BepiPred_3 %>% filter(protein == protein_indexed),
-      required_adjustment
-    )
+    data_BepiPred_3_subset <- data_BepiPred_3 %>% 
+      mutate(Accession = tolower(Accession)) %>%
+      filter(
+        is.na(PDB),
+        Accession == tolower(protein_indexed) | Accession == tolower(TIGR4_entry)
+      )
     
   }
+  
+  bepipred3_seqres <- data_BepiPred_3_subset %>% 
+    pull(Residue) %>%
+    aa321() %>%
+    str_c(collapse = "") %>%
+    AAString()
+  
+  ca_atoms_reconstructed <- reconstruct.ca_atoms(pdb_object)
+  pdb_seqres <- ca_atoms_reconstructed %>%
+    pull(seqres_resid) %>%
+    aa321() %>%
+    str_c(collapse = "") %>%
+    AAString()
+  
+  alignment <- pairwiseAlignment(
+    pattern = pdb_seqres,
+    subject = bepipred3_seqres
+  )
+  
+  aligned_seqres <- as.character(alignedPattern(alignment))
+  aligned_bepipred2_seqres <- as.character(alignedSubject(alignment))
+  
+  alignment_df <- tibble(
+    seqres_resid = strsplit(aligned_seqres, "")[[1]],
+    bepipred3_resid = strsplit(aligned_bepipred2_seqres, "")[[1]],
+  ) %>%
+    mutate(
+      seqresno = row_number(),
+      Position = case_when(
+        bepipred3_resid != "-" ~ cumsum(bepipred3_resid != "-"),
+        TRUE ~ NA
+      ),
+      seqres_resid = aa123(seqres_resid)
+    ) %>%
+    left_join(
+      ca_atoms_reconstructed,
+      by = c("seqresno", "seqres_resid")
+      )
+  
+  resmap <- alignment_df %>%
+    left_join(
+      data_BepiPred_3_subset %>% mutate(Residue = aa321(Residue)),
+      by = c(
+        "Position",
+        "bepipred3_resid" = "Residue"
+             )
+    ) 
   
   if (is.null(data_BepiPred_3_with_resno)) {
     data_BepiPred_3_with_resno <- resmap
@@ -244,6 +331,7 @@ for (i in seq_len(nrow(data_namesclasspdb))) {
 
 data_BepiPred_3_with_resno
 ```
+
 
 ## Store results as csv
 ```{r}
@@ -308,7 +396,7 @@ data_DiscoTope <- data_DiscoTope_raw %>%
   ) %>%
   select(-pdb, -res_id, -file_id, -model_id) %>%
   left_join(
-    data_namesclasspdb, by = c("protein","PDB")
+    data_namesclasspdb, by = c("protein", "PDB")
   )
 
 data_DiscoTope
@@ -380,10 +468,6 @@ data_Epigraph <- data_Epigraph_raw %>%
   )
   
 data_Epigraph %>% filter(is.na(PDB))
-```
-
-```{r}
-data_Epigraph %>% pull(protein) %>% unique()
 ```
 
 ## Store results as csv

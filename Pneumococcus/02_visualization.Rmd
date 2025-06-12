@@ -34,26 +34,25 @@ data_DiscoTope <- read.csv("output/DiscoTope/data_DiscoTope.csv", check.names = 
 data_predictions_sequencebased <- full_join(
   data_BepiPred_2_with_resno %>%
     mutate(
-           `BepiPred-2.0 probability` = EpitopeProbability,
-           `RSA NetsurfP` = RelativeSurfaceAccessilibity
-           ) %>%
-    select(proteinclass,protein,TIGR4_name,PDB, chain, resno,resid,`BepiPred-2.0 probability`,`RSA NetsurfP`,x,y,z) %>%
-    filter(resid %in% toupper(AMINO_ACID_CODE))
+      `BepiPred-2.0 probability` = EpitopeProbability,
+      `RSA NetsurfP` = RelativeSurfaceAccessilibity
+    ) %>%
+    select(
+      proteinclass, protein, TIGR4_name, PDB, chain, resno, resid, x,y,z,b, seqresno, seqres_resid,
+      `BepiPred-2.0 probability`,`RSA NetsurfP`
+    ) 
   ,
   
   data_BepiPred_3_with_resno %>%
     select(
-      proteinclass,protein,TIGR4_name,PDB, chain, resno, resid, `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`,x,y,z
-      ) %>%
-    filter(resid %in% toupper(AMINO_ACID_CODE))
+      proteinclass, protein, TIGR4_name, PDB, chain, resno, resid, x,y,z,b, seqresno, seqres_resid, 
+      `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`
+    ) 
   ,
-  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid","x","y","z")
+  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid","seqres_resid","seqresno","x","y","z","b")
 )
 
 data_predictions_sequencebased
-
-data_predictions_sequencebased %>%
-  filter(if_any(everything(), is.na))
 ```
 
 
@@ -74,26 +73,21 @@ data_predictions_structurebased <- full_join(
       proteinclass,protein,TIGR4_name,PDB, chain, resno, resid, `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, `RSA Shrake-Rupley`
       )
   , 
-  by = c("proteinclass","protein","TIGR4_name","PDB","resno","chain","resid")
+  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid")
 )
 data_predictions_structurebased
-
-data_predictions_structurebased %>%
-  filter(if_any(everything(), is.na))
-
-data_predictions_structurebased <- data_predictions_structurebased #%>%
-  #na.omit()
-  
-#data_predictions_structurebased %>%
-#  filter(if_any(everything(), is.na))
 ```
 
 
 ```{r}
 data_predictions <- full_join(
   data_predictions_sequencebased,
-  data_predictions_structurebased,
-  by = c("proteinclass","protein","TIGR4_name","PDB","chain", "resno","resid")
+  data_predictions_structurebased %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%
+    filter(chain_length == max(chain_length)) %>%
+    filter(chain == min(chain)),
+  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid")
   )
 
 data_predictions %>%
@@ -106,21 +100,10 @@ data_predictions
 ```
 
 
-
-
-```{r}
-data_predictions <- data_predictions %>%
-  left_join(
-    data_namesclasspdb
-  ) 
-
-data_predictions
-```
-
 ## normalize
 ```{r}
 data_predictions_normalized <- data_predictions %>%
-  group_by(protein,PDB, chain) %>%
+  group_by(protein,PDB,chain) %>%
   mutate(
     across(
       c(#`BepiPred-2.0 probability`,
@@ -582,7 +565,8 @@ ggplot(pca_scores, aes(x = PC1, y = PC2, label = score_type)) +
 matching variability consensus sequence to epitope predictions sequences
 ## variability_data_with_resno
 ```{r}
-data_variability <- read.csv("output/data_variability.csv")
+data_variability <- read.csv("output/data_variability.csv") #%>%
+  #distinct(structure,chain,x,y,z, .keep_all = TRUE)
 
 data_variability
 ```
@@ -597,24 +581,26 @@ setdiff(
   tolower(unique(data_predictions$protein)),
   tolower(unique(data_variability$protein))
 )
+
+setdiff(
+  tolower(unique(data_variability$protein)),
+  tolower(unique(data_predictions$protein))
+)
 ```
 
 ```{r}
 data_predictions_with_variability <- full_join(
-  data_predictions_longestchain,
-  data_variability %>% select(-chain) %>% na.omit(),
-  by = c("proteinclass","protein","PDB","resno","resid", "x", "y", "z"))
+  data_predictions,
+  data_variability %>% select(-chain),
+  by = c("proteinclass","protein","PDB","resno","resid", "seqresno", "seqres_resid", "x", "y", "z", "b"))
 
 data_predictions_with_variability
 ```
 
 
 ```{r}
-data_predictions_with_variability %>% filter(PDB == "3ZFJ") %>%
-  select(proteinclass, protein, PDB, chain, resno, resid, consensus_res, seqposno) 
-
-data_variability %>% filter(PDB == "3ZFJ")
-data_predictions_longestchain %>% filter(PDB == "3ZFJ")
+data_predictions %>% filter(PDB == "3CX3") 
+data_variability %>% filter(PDB == "3CX3")
 ```
 
 ### normalized
@@ -806,10 +792,10 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
 
 #### longestchain
 ```{r, fig.width = 14}
-for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PDB))) {
-  print(PDB_entry)
+for (structure_entry in na.omit(unique(data_predictions_with_variability_normalized$structure))[37]) {
+  print(structure_entry)
   
-  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == PDB_entry)
+  data_subset <- data_predictions_with_variability_normalized %>% filter(structure == structure_entry)
   
   protein_name <- unique(data_subset$protein)
   
@@ -826,10 +812,10 @@ for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PD
   data_subset_chain <- data_subset %>% filter(chain == longest_chain)
   
   data_subset_wide <- data_subset_chain %>%
-    select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+    select(seqresno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
            `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
     #distinct() %>%
-    column_to_rownames("resno") %>%
+    column_to_rownames("seqresno") %>%
     as.data.frame()
   
   bar_data <- data_subset_wide$var_freq
@@ -880,7 +866,7 @@ for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PD
     name = "Score",
     cluster_rows = TRUE,
     cluster_columns = FALSE,
-    column_title = paste0(PDB_entry, " chain ", longest_chain, " (", protein_name, ")"),
+    column_title = paste0(structure_entry, " chain ", longest_chain, " (", protein_name, ")"),
     col = colorRampPalette(c("blue", "gray95", "red"))(50),
     top_annotation = top_annot,
     bottom_annotation = bottom_annot,
@@ -891,7 +877,7 @@ for (PDB_entry in na.omit(unique(data_predictions_with_variability_normalized$PD
   
   print(figure)
   
-  png(filename = paste0("output/figures/heatmap/variability/", PDB_entry, "_", longest_chain, "_heatmap.png"),
+  png(filename = paste0("output/figures/heatmap/variability/", structure_entry, "_", longest_chain, "_heatmap.png"),
       width = 14, height = 10, units = "in", res = 300, bg = "white")
   
   dev.off()
@@ -2215,6 +2201,13 @@ pivot_list <- c(
   "Epigraph_score"
 )
 
+score_label_map <- c(
+        "BepiPred-2.0 probability" = "BepiPred 2.0",
+        "BepiPred-3.0 score" = "BepiPred 3.0",
+        "DiscoTope-3.0_calibrated_score" = "DiscoTope 3.0",
+        "Epigraph_score" = "Epigraph"
+      )
+
 ```
 
 ```{r, fig.width=14}
@@ -2312,43 +2305,404 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
 
 
 ## summary statistics
+```{r}
+global_pLDDT_minimum <- 80
+
+data_predictions_with_variability_normalized %>% group_by(proteinclass,protein,chain,structure) %>%
+  filter(is.na(PDB)) %>%
+  summarize(mean_b = mean(b)) %>%
+  filter(!is.na(mean_b)) %>%
+  arrange(mean_b)
+
+low_AF_confidence_proteins <- data_predictions_with_variability_normalized %>%
+  group_by(proteinclass,protein,chain,structure) %>%
+  filter(is.na(PDB)) %>%
+  summarize(mean_b = mean(b)) %>%
+  filter(mean_b < global_pLDDT_minimum) %>% 
+  pull(protein)
+
+low_AF_confidence_proteins
+
+high_confidence_proteins <- data_predictions_with_variability_normalized %>%
+  filter(!(protein %in% low_AF_confidence_proteins))
+
+high_confidence_proteins
+```
+
+
 ### score vs var
+```{r}
+data_predictions_with_variability_normalized %>% filter(PDB == "1W9R")
+```
+
+```{r, fig.width=14}
+library(ggrepel)
+min_var_freq <- 0.05
+
+high_confidence_proteins %>%
+  pivot_longer(cols = pivot_list, 
+               names_to = "Score_Type", values_to = "Score_Value") %>%
+  group_by(proteinclass, structure, Score_Type) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  filter(PDB == "2BIB") %>%
+  #filter(RSA > 0.2) %>%
+  #summarize(
+  #  mean_score = mean(Score_Value, na.rm=TRUE),
+  #  mean_variability = mean(var_freq, na.rm=TRUE),
+  #  n_seq = mean(n_seq),
+  #  seq_length = mean(seq_length)
+  #) %>%
+  #mutate(
+  #  mean_variability = case_when(
+  #    is.na(mean_variability) ~ 0,
+  #    TRUE ~ mean_variability
+  #  ),
+  #  mean_score = case_when(
+  #    is.na(mean_score) ~ 0,
+  #    TRUE ~ mean_score
+  #  )
+  #) %>%
+  #filter(mean_score != 0,
+  #       mean_variability != 0) %>%
+  ggplot(aes(x=var_freq, y=Score_Value)) +
+  geom_point(aes(col = proteinclass)) +
+  #geom_text_repel(aes(label = PDB, col = proteinclass, alpha = n_seq/seq_length), min.segment.length = 0.01, max.overlaps = 100) +
+  
+  geom_text(
+    aes(x=(max(var_freq, na.rm = TRUE) - min(var_freq, na.rm = TRUE))/2,
+        y=Inf, label = score_label), check_overlap = TRUE, vjust = 1, size = 5
+            ) +
+  
+  geom_smooth(
+        data = . %>% filter(var_freq > min_var_freq),
+        #aes(group = structure, color = proteinclass),
+        method = "lm",
+        se = FALSE, size = 2, color="black"
+      ) +
+  
+  #geom_smooth(
+  #      data = . %>% filter(var_freq > min_var_freq),
+  #      aes(group = structure, color = proteinclass),
+  #      method = "lm",
+  #      se = FALSE, size = 1
+  #    ) +
+  
+  stat_regline_equation(
+    data = . %>% filter(var_freq > min_var_freq),
+    aes(label = ..rr.label..), size = 5, 
+    label.x.npc = "right",   
+    label.y.npc = "top",     
+    hjust = 1,               
+    vjust = 1                
+  ) +
+  
+  scale_y_continuous(
+    limits = c(0, 1.1),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
+  
+  labs(
+    y= "Residue epitope score",
+    x= "Residue variability"
+  ) +
+  scale_alpha_continuous(limits = c(0,NA)) +
+  theme_bw() +
+  facet_wrap(~Score_Type) +
+  theme(
+    panel.spacing = unit(1, "lines"), 
+    #panel.grid = element_blank()
+    
+    axis.title.x = element_text(size = 15),
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    
+    strip.background = element_blank(),
+    strip.text = element_blank()
+  )
+```
+
+```{r, fig.width=14}
+library(ggrepel)
+min_var_freq <- 0.05
+
+high_confidence_proteins %>%
+  pivot_longer(cols = pivot_list, 
+               names_to = "Score_Type", values_to = "Score_Value") %>%
+  group_by(proteinclass, structure, Score_Type) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  #filter(RSA > 0.2) %>%
+  #summarize(
+  #  mean_score = mean(Score_Value, na.rm=TRUE),
+  #  mean_variability = mean(var_freq, na.rm=TRUE),
+  #  n_seq = mean(n_seq),
+  #  seq_length = mean(seq_length)
+  #) %>%
+  #mutate(
+  #  mean_variability = case_when(
+  #    is.na(mean_variability) ~ 0,
+  #    TRUE ~ mean_variability
+  #  ),
+  #  mean_score = case_when(
+  #    is.na(mean_score) ~ 0,
+  #    TRUE ~ mean_score
+  #  )
+  #) %>%
+  #filter(mean_score != 0,
+  #       mean_variability != 0) %>%
+  ggplot(aes(x=var_freq, y=Score_Value)) +
+  geom_point(aes(col = proteinclass)) +
+  #geom_text_repel(aes(label = PDB, col = proteinclass, alpha = n_seq/seq_length), min.segment.length = 0.01, max.overlaps = 100) +
+  
+  geom_text(
+    aes(x=(max(var_freq, na.rm = TRUE) - min(var_freq, na.rm = TRUE))/2,
+        y=Inf, label = score_label), check_overlap = TRUE, vjust = 1, size = 5
+            ) +
+  
+  geom_smooth(
+        data = . %>% filter(var_freq > min_var_freq),
+        #aes(group = structure, color = proteinclass),
+        method = "lm",
+        se = FALSE, size = 2, color="black"
+      ) +
+  
+  geom_smooth(
+        data = . %>% filter(var_freq > min_var_freq),
+        aes(group = structure, color = proteinclass),
+        method = "lm",
+        se = FALSE, size = 1
+      ) +
+  
+  stat_regline_equation(
+    data = . %>% filter(var_freq > min_var_freq),
+    aes(label = ..rr.label..), size = 5, 
+    label.x.npc = "right",   
+    label.y.npc = "top",     
+    hjust = 1,               
+    vjust = 1                
+  ) +
+  
+  scale_y_continuous(
+    limits = c(0, 1.1),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
+  
+  labs(
+    y= "Residue epitope score",
+    x= "Residue variability"
+  ) +
+  scale_alpha_continuous(limits = c(0,NA)) +
+  theme_bw() +
+  facet_wrap(~Score_Type) +
+  theme(
+    panel.spacing = unit(1, "lines"), 
+    #panel.grid = element_blank()
+    
+    axis.title.x = element_text(size = 15),
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    
+    strip.background = element_blank(),
+    strip.text = element_blank()
+  )
+```
+
+
+```{r}
+high_confidence_proteins_with_seroprof <- high_confidence_proteins %>%
+  rowwise() %>%
+    mutate(
+    seroprof_titers = data_variability_with_seroprof$seroprof_titers[
+      match(structure, data_variability_with_seroprof$structure)
+    ]
+  )
+```
+
+
+```{r, fig.width=14}
+library(ggrepel)
+min_var_freq <- 0.05
+
+high_confidence_proteins_with_seroprof %>%
+  pivot_longer(cols = pivot_list, 
+               names_to = "Score_Type", values_to = "Score_Value") %>%
+  group_by(proteinclass, structure, Score_Type) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  #filter(RSA > 0.2) %>%
+  #summarize(
+  #  mean_score = mean(Score_Value, na.rm=TRUE),
+  #  mean_variability = mean(var_freq, na.rm=TRUE),
+  #  n_seq = mean(n_seq),
+  #  seq_length = mean(seq_length)
+  #) %>%
+  #mutate(
+  #  mean_variability = case_when(
+  #    is.na(mean_variability) ~ 0,
+  #    TRUE ~ mean_variability
+  #  ),
+  #  mean_score = case_when(
+  #    is.na(mean_score) ~ 0,
+  #    TRUE ~ mean_score
+  #  )
+  #) %>%
+  #filter(mean_score != 0,
+  #       mean_variability != 0) %>%
+  ggplot(aes(x=var_freq, y=Score_Value)) +
+  geom_point(aes(col = seroprof_titers)) +
+  #geom_text_repel(aes(label = PDB, col = proteinclass, alpha = n_seq/seq_length), min.segment.length = 0.01, max.overlaps = 100) +
+  
+  geom_text(
+    aes(x=(max(var_freq, na.rm = TRUE) - min(var_freq, na.rm = TRUE))/2,
+        y=Inf, label = score_label), check_overlap = TRUE, vjust = 1, size = 5
+            ) +
+  
+  geom_smooth(
+        data = . %>% filter(var_freq > min_var_freq),
+        #aes(group = structure, color = proteinclass),
+        method = "lm",
+        se = FALSE, size = 2, color="black"
+      ) +
+  
+  geom_smooth(
+        data = . %>% filter(var_freq > min_var_freq),
+        aes(group = structure, color = seroprof_titers),
+        method = "lm",
+        se = FALSE, size = 1
+      ) +
+  
+  stat_regline_equation(
+    data = . %>% filter(var_freq > min_var_freq),
+    aes(label = ..rr.label..), size = 5, 
+    label.x.npc = "right",   
+    label.y.npc = "top",     
+    hjust = 1,               
+    vjust = 1                
+  ) +
+  
+  scale_y_continuous(
+    limits = c(0, 1.1),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
+  
+  labs(
+    y= "Residue epitope score",
+    x= "Residue variability"
+  ) +
+  scale_alpha_continuous(limits = c(0,NA)) +
+  theme_bw() +
+  facet_wrap(~Score_Type) +
+  theme(
+    panel.spacing = unit(1, "lines"), 
+    #panel.grid = element_blank()
+    
+    axis.title.x = element_text(size = 15),
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    
+    strip.background = element_blank(),
+    strip.text = element_blank()
+  )
+```
+
 ```{r, fig.width=14}
 library(ggrepel)
 
-data_predictions_with_variability_normalized %>%
+high_confidence_proteins_with_seroprof %>%
   pivot_longer(cols = pivot_list, 
                names_to = "Score_Type", values_to = "Score_Value") %>%
-  group_by(proteinclass, PDB, Score_Type) %>%
+  group_by(proteinclass, structure, Score_Type) %>%
+  #filter(RSA > 0.2) %>%
   summarize(
-    mean_score = mean(Score_Value),
-    mean_variability = mean(var_freq),
+    mean_score = mean(Score_Value, na.rm=TRUE),
+    mean_variability = mean(var_freq, na.rm=TRUE),
     n_seq = mean(n_seq),
     seq_length = mean(seq_length)
   ) %>%
-  mutate(
-    mean_variability = case_when(
-      is.na(mean_variability) ~ 0,
-      TRUE ~ mean_variability
-    ),
-    mean_score = case_when(
-      is.na(mean_score) ~ 0,
-      TRUE ~ mean_score
-    )
-  ) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  #mutate(
+  #  mean_variability = case_when(
+  #    is.na(mean_variability) ~ 0,
+  #    TRUE ~ mean_variability
+  #  ),
+  #  mean_score = case_when(
+  #    is.na(mean_score) ~ 0,
+  #    TRUE ~ mean_score
+  #  )
+  #) %>%
+  #filter(mean_score != 0,
+  #       mean_variability != 0) %>%
   ggplot(aes(x=mean_variability, y=mean_score)) +
-  geom_point(aes(col = proteinclass, alpha = n_seq/seq_length)) +
+  geom_point(
+    aes(col = proteinclass#, 
+        #alpha = n_seq/seq_length
+        )
+    ) +
   #geom_text_repel(aes(label = PDB, col = proteinclass, alpha = n_seq/seq_length), min.segment.length = 0.01, max.overlaps = 100) +
-  scale_alpha_continuous(limits = c(0,NA)) +
+  
+  geom_text(
+    aes(x=(max(mean_variability, na.rm = TRUE) - min(mean_variability, na.rm = TRUE))/2,
+        y=Inf, label = score_label), check_overlap = TRUE, vjust = 1, size = 5
+            ) +
+  
+  geom_smooth(
+        data = . %>% filter(mean_variability > 0),
+        #aes(group = structure, color = proteinclass),
+        method = "lm",
+        se = FALSE, size = 2, color="black"
+      ) +
+  
+  geom_smooth(
+        data = . %>% filter(mean_variability > 0),
+        aes(col = proteinclass),
+        method = "lm",
+        se = FALSE, size = 1
+      ) +
+  
+  stat_regline_equation(
+    data = . %>% filter(mean_variability > 0),
+    aes(label = ..rr.label..), size = 5, 
+    label.x.npc = "right",   
+    label.y.npc = "top",     
+    hjust = 1,               
+    vjust = 1                
+  ) +
+  
+  labs(
+    y= "Mean epitope score",
+    x= "Mean variability"
+  ) +
+  
+  scale_y_continuous(
+    limits = c(0, 1.1),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
   theme_bw() +
-  facet_wrap(~Score_Type)
+  facet_wrap(~Score_Type) +
+  theme(
+    panel.spacing = unit(1, "lines"), 
+    #panel.grid = element_blank()
+    
+    strip.background = element_blank(),
+    strip.text = element_blank()
+  )
 ```
 
 ### residue only
 #### regression
 ```{r}
-regression_results_all <- data_predictions_with_variability_normalized %>%
-  select(PDB,resno, all_of(pivot_list), var_freq) %>%
+regression_results_all <- high_confidence_proteins_with_seroprof %>%
+  filter(!(protein %in% low_AF_confidence_proteins)) %>%
+  select(PDB,resno, all_of(pivot_list), var_freq, seroprof_titers) %>%
   pivot_longer(cols = pivot_list, 
                    names_to = "Score_Type", values_to = "Score_Value") %>%
   group_by(PDB, Score_Type) %>%
@@ -2365,60 +2719,33 @@ regression_results_all
 ```
 
 
-```{r, fig.width = 14}
-regression_results_all %>%
-  #group_by(PDB, Score_Type, term) %>%
-  ggplot(aes(x = Score_Type, y = r.squared)) +
-  geom_violin(aes(fill = Score_Type),trim = FALSE, scale = "width", alpha = 0.6) +
-  geom_line(aes(group = interaction(PDB, term)), color = "gray70", alpha = 0.5) +
-  geom_boxplot(width = 0.1) +
-  geom_point(
-    aes(alpha = -log10(p.value) + 1)
-    ) +
-  theme_bw() +
-  labs(
-    x = "Prediction method",
-    y = "R-squared",
-    title = "Regression (epitope prediction score ~ variability)"
-  )
-
-regression_results_all %>%
-  group_by(PDB, Score_Type, term) %>%
-  mutate(log1p_p.value = -log10(p.value) + 1) %>%
-  ggplot(aes(x = Score_Type, y = log1p_p.value)) +
-  geom_violin(aes(fill = Score_Type),trim = FALSE, scale = "width", alpha = 0.6) +
-  geom_line(aes(group = interaction(PDB, term)), color = "gray70", alpha = 0.5) +
-  geom_boxplot(width = 0.1) +
-  geom_point(
-    aes(alpha = r.squared, col = term)
-    ) +
-  theme_bw() +
-  labs(
-    x = "Prediction method",
-    y = "p-value",
-    title = "Regression (epitope prediction score ~ variability)"
-  ) +
-  facet_wrap(~term, scales = "free_y", ncol = 1)
-
-```
 
 #### binary classification
+##### var only
 ```{r}
-class_results_residue <- data_predictions_with_variability_normalized %>%
-  select(proteinclass,protein,PDB,resno, all_of(pivot_list), var_freq) %>%
+RSA_min <- 0.15
+var_freq_min <- 0.05
+
+class_results_residue <- high_confidence_proteins_with_seroprof %>%
+  
+  select(proteinclass,protein,PDB,resno, chain,all_of(pivot_list), var_freq, RSA, x, y, z, b, seqresno, seroprof_titers) %>%
   pivot_longer(cols = pivot_list, 
                names_to = "Score_Type", values_to = "Score_Value") %>%
   group_by(PDB, Score_Type) %>%
   mutate(
     var_class_00 = case_when(
       is.na(var_freq) ~ NA_character_,
-      var_freq <= 0 ~ "not variable",
-      TRUE ~ "variable"
+      var_freq <= 0 ~ "nvar",
+      TRUE ~ "var"
     ),
     var_class_05 = case_when(
       is.na(var_freq) ~ NA_character_,
-      var_freq <= 0.05 ~ "not variable",
-      TRUE ~ "variable"
+      var_freq <= var_freq_min ~ "nvar",
+      TRUE ~ "var"
+    ),
+    RSA_class = case_when(
+      RSA < RSA_min ~ "nsur",
+      TRUE ~ "sur"
     )
   ) %>%
   pivot_longer(
@@ -2448,8 +2775,10 @@ class_results_residue
 
 ```{r, fig.width=14}
 class_results_residue %>%
-  drop_na()%>%
-  ggplot(aes(x= Score_Type, fill = var_class, y = Score_Value)) +
+  drop_na(var_class) %>%
+  filter(var_class_type == "var_class_05") %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  ggplot(aes(x= var_class, fill = var_class, y = Score_Value)) +
   geom_violin(
     aes(fill = var_class),
     trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
@@ -2458,28 +2787,292 @@ class_results_residue %>%
     aes(fill = var_class),
     width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
   ) +
-  #geom_point(position = position_dodge(width = 0.8)) +
+  #geom_point(aes(color = proteinclass)) +
+  #geom_path(aes(group = structure, color = proteinclass)) +
   stat_compare_means(
-    aes(group = var_class),
+    comparisons = list(c("nvar", "var")),
     method = "wilcox",
     label = "p.signif",
-    hide.ns = TRUE
+    hide.ns = TRUE, label.y = 1.1
   ) +
   labs(
-    x = "Prediction method",
-    y = "Score value",
-    title = "Not variable vs variable (wilcox.test)"
+    x = "",
+    y = "Residue epitope prediction score",
+    title = "Not variable vs variable (wilcox.test)",
+    fill = "Variability"
   ) +
-  facet_wrap(~ var_class_type, nrow = 2) +
-  scale_fill_manual(values = c("not variable" = "#999999", "variable" = "#E69F00")) +
-  theme_bw()
+  #facet_grid(var_class_type~proteinclass) +
+  facet_grid(
+    ~Score_Type, 
+    labeller = labeller(
+      Score_Type = score_label_map
+    )
+  ) +
+  geom_text(
+    aes(x=1.5,y=1.3, label = score_label), check_overlap = TRUE, size = 5
+            ) +
+  scale_fill_manual(
+    values = c("nvar" = "#D55E00", "var" = "#56B4E9"),
+    labels = c("nvar" = "not variable", "var" = "variable")
+  ) +
+  scale_x_discrete(
+    labels = c(
+      "nvar" = "not variable", 
+      "var" = "variable"
+    )
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1.35),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
+  theme_bw() +
+  theme(
+    panel.spacing = unit(0, "lines"), 
+    legend.position = "none",
+    panel.grid = element_blank(), 
+    #axis.title.x = ,
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+
+    strip.background = element_blank(),
+    strip.text = element_blank()
+    )
+```
+
+```{r, fig.width = 14}
+class_results_residue %>%
+  drop_na(var_class) %>%
+  filter(var_class_type == "var_class_05") %>%
+  mutate(
+    is_sur.var = factor(
+      interaction(RSA_class, var_class),
+      levels = c("nsur.nvar","nsur.var", "sur.nvar", "sur.var")
+      )
+    ) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  ggplot(aes(x= is_sur.var, fill = is_sur.var, y = Score_Value)) +
+  geom_violin(
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
+  ) +
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
+  ) +
+  #geom_point(aes(color = proteinclass)) +
+  #geom_path(aes(group = structure, color = proteinclass)) +
+  stat_compare_means(
+    comparisons = combn(c("nsur.nvar","nsur.var", "sur.nvar", "sur.var"), 2, simplify = FALSE),
+    method = "wilcox",
+    label = "p.signif",
+    hide.ns = FALSE,
+    label.y = seq(1,1.6,by=0.1)
+  ) +
+  labs(
+    x = "",
+    y = "Residue epitope prediction score",
+    title = "Not variable vs variable & surface vs non-surface (wilcox.test)",
+    fill = "Accessibility % Variability"
+  ) +
+  #facet_grid(var_class_type~proteinclass) +
+  facet_grid(~Score_Type) +
+  scale_fill_manual(
+    values =  c("nsur.nvar" = "#D55E00","nsur.var" = "#E69F00", "sur.nvar"  = "#0072B2", "sur.var" = "#56B4E9"),
+    labels =  c("nsur.nvar" = "non-surface\nnot variable", 
+                "nsur.var" = "non-surface\nvariable", 
+                "sur.nvar" = "surface\nnot variable", 
+                "sur.var" = "surface\nvariable")
+  ) +
+  scale_x_discrete(
+    labels = c(
+      "nsur.nvar" = "non-surface\nnot variable", 
+      "nsur.var" = "non-surface\nvariable", 
+      "sur.nvar" = "surface\nnot variable", 
+      "sur.var" = "surface\nvariable"
+    )
+  ) +
+  
+  geom_text(
+    aes(x=2.5,y=1.65, label = score_label), check_overlap = TRUE, size = 5
+            ) +
+  
+  scale_y_continuous(
+    limits = c(0, 1.75),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
+  theme_bw() +
+  theme(
+    panel.spacing = unit(0, "lines"), 
+    legend.position = "none",
+    panel.grid = element_blank(), 
+    #axis.title.x = ,
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+
+    strip.background = element_blank(),
+    strip.text = element_blank()
+    )
+```
+
+```{r, fig.width = 14}
+class_results_residue %>%
+  drop_na(var_class) %>%
+  filter(var_class_type == "var_class_05") %>%
+  mutate(
+    is_sur.var = factor(
+      interaction(RSA_class, var_class),
+      levels = c("nsur.nvar","nsur.var", "sur.nvar", "sur.var")
+      )
+    ) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  ggplot(aes(x= is_sur.var, fill = is_sur.var, y = Score_Value)) +
+  geom_violin(
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
+  ) +
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
+  ) +
+  #geom_point(aes(color = proteinclass)) +
+  #geom_path(aes(group = structure, color = proteinclass)) +
+  stat_compare_means(
+    comparisons = combn(c("nsur.nvar","nsur.var", "sur.nvar", "sur.var"), 2, simplify = FALSE),
+    method = "wilcox",
+    label = "p.signif",
+    hide.ns = FALSE,
+    label.y = seq(1,1.6,by=0.1)
+  ) +
+  labs(
+    x = "",
+    y = "Residue epitope prediction score",
+    title = "Not variable vs variable & surface vs non-surface (wilcox.test)",
+    fill = "Accessibility % Variability"
+  ) +
+  #facet_grid(var_class_type~proteinclass) +
+  facet_grid(proteinclass~score_label) +
+  scale_fill_manual(
+    values =  c("nsur.nvar" = "#D55E00","nsur.var" = "#E69F00", "sur.nvar"  = "#0072B2", "sur.var" = "#56B4E9"),
+    labels =  c("nsur.nvar" = "non-surface\nnot variable", 
+                "nsur.var" = "non-surface\nvariable", 
+                "sur.nvar" = "surface\nnot variable", 
+                "sur.var" = "surface\nvariable")
+  ) +
+  scale_x_discrete(
+    labels = c(
+      "nsur.nvar" = "non-surface\nnot variable", 
+      "nsur.var" = "non-surface\nvariable", 
+      "sur.nvar" = "surface\nnot variable", 
+      "sur.var" = "surface\nvariable"
+    )
+  ) +
+  
+  #geom_text(
+  #  aes(x=2.5,y=1.65, label = score_label), check_overlap = TRUE, size = 5
+  #          ) +
+  #
+  scale_y_continuous(
+    limits = c(0, 1.75),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
+  theme_bw() +
+  theme(
+    panel.spacing = unit(0, "lines"), 
+    legend.position = "none",
+    panel.grid = element_blank(), 
+    #axis.title.x = ,
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+
+    #strip.background = element_blank(),
+    #strip.text = element_blank()
+    )
+```
+
+```{r, fig.width = 14}
+class_results_residue %>%
+  drop_na(var_class) %>%
+  filter(var_class_type == "var_class_05") %>%
+  mutate(
+    is_sur.var = factor(
+      interaction(RSA_class, var_class),
+      levels = c("nsur.nvar","nsur.var", "sur.nvar", "sur.var")
+      )
+    ) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  ggplot(aes(x= is_sur.var, fill = is_sur.var, y = Score_Value)) +
+  geom_violin(
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
+  ) +
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
+  ) +
+  #geom_point(aes(color = proteinclass)) +
+  #geom_path(aes(group = structure, color = proteinclass)) +
+  stat_compare_means(
+    comparisons = combn(c("nsur.nvar","nsur.var", "sur.nvar", "sur.var"), 2, simplify = FALSE),
+    method = "wilcox",
+    label = "p.signif",
+    hide.ns = FALSE,
+    label.y = seq(1,1.6,by=0.1)
+  ) +
+  labs(
+    x = "",
+    y = "Residue epitope prediction score",
+    title = "Not variable vs variable & surface vs non-surface (wilcox.test)",
+    fill = "Accessibility % Variability"
+  ) +
+  #facet_grid(var_class_type~proteinclass) +
+  facet_grid(seroprof_titers~score_label) +
+  scale_fill_manual(
+    values =  c("nsur.nvar" = "#D55E00","nsur.var" = "#E69F00", "sur.nvar"  = "#0072B2", "sur.var" = "#56B4E9"),
+    labels =  c("nsur.nvar" = "non-surface\nnot variable", 
+                "nsur.var" = "non-surface\nvariable", 
+                "sur.nvar" = "surface\nnot variable", 
+                "sur.var" = "surface\nvariable")
+  ) +
+  scale_x_discrete(
+    labels = c(
+      "nsur.nvar" = "non-surface\nnot variable", 
+      "nsur.var" = "non-surface\nvariable", 
+      "sur.nvar" = "surface\nnot variable", 
+      "sur.var" = "surface\nvariable"
+    )
+  ) +
+  
+  #geom_text(
+  #  aes(x=2.5,y=1.65, label = score_label), check_overlap = TRUE, size = 5
+  #          ) +
+  #
+  scale_y_continuous(
+    limits = c(0, 1.75),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
+  theme_bw() +
+  theme(
+    panel.spacing = unit(0, "lines"), 
+    legend.position = "none",
+    panel.grid = element_blank(), 
+    #axis.title.x = ,
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+
+    #strip.background = element_blank(),
+    #strip.text = element_blank()
+    )
 ```
 
 
-
-
-
-```{r}
+##### means
+```{}
 class_results_residue_means <- class_results_residue %>%
   group_by(PDB,protein,proteinclass, Score_Type, var_class_type) %>%
   drop_na() %>%
@@ -2517,7 +3110,7 @@ class_results_residue_means <- class_results_residue %>%
 class_results_residue_means
 ```
 
-```{r, fig.width=14}
+```{, fig.width=14}
 class_results_residue_means %>%
   ggplot(aes(x = Score_Type, fill = mean_group, y = mean_value, group = interaction(Score_Type, mean_group))) +
   geom_violin(
@@ -2585,7 +3178,7 @@ class_results_residue_means %>%
   
 ```
 
-```{r, fig.width=14}
+```{, fig.width=14}
 class_results_residue_means %>%
   ggplot(aes(x = Score_Type, fill = mean_group, y = mean_value, group = interaction(Score_Type, mean_group))) +
   geom_violin(
@@ -2690,50 +3283,45 @@ get_min_distance_to_var <- function(df_sub, min_var_freq = 0) {
 ```
 
 ```{r}
-results_all_radius <- data_predictions_with_variability_normalized %>%
-  group_by(PDB, chain) %>%
+results_all_radius <- class_results_residue %>%
+  drop_na(x,y,z) %>%
+  group_by(protein, PDB, chain, Score_Type, var_class_type) %>%
   group_modify(~ get_min_distance_to_var(.x)) %>%
   ungroup()
 
 results_all_radius
 ```
 
-```{r}
+```{}
 max_residue_distance <- 10
 
 class_results_radius_means <- results_all_radius %>%
-  pivot_longer(
-    cols = pivot_list, 
-    names_to = "Score_Type", values_to = "Score_Value"
-  ) %>%
   mutate(
-    near_variable_00 = case_when(
+    distance_variable_00 = case_when(
       is.na(closest_var_freq) ~ NA_character_,
-      closest_var_freq >= 0 & min_distance_to_var <= max_residue_distance ~ "yes",
-      TRUE ~ "no"
+      closest_var_freq >= 0 & min_distance_to_var <= max_residue_distance ~ "neighbor",
+      TRUE ~ "nneighbor"
     ),
-    near_variable_05 = case_when(
+    distance_variable_05 = case_when(
       is.na(closest_var_freq) ~ NA_character_,
-      closest_var_freq >= 0.05 & min_distance_to_var <= max_residue_distance ~ "yes",
-      TRUE ~ "no"
+      closest_var_freq >= 0.05 & min_distance_to_var <= max_residue_distance ~ "neighbor",
+      TRUE ~ "nneighbor"
     )
   ) %>%
   
   pivot_longer(
-    cols = c(near_variable_00, near_variable_05),
+    cols = c(distance_variable_00, distance_variable_05),
     names_to = "near_variable_type",
-    values_to = "near_variable"
+    values_to = "variable_distance"
   ) %>%
-  
   mutate(
-    near_variable = factor(
-      near_variable,
-      levels = c("no", "yes")
+    variable_distance = factor(
+      variable_distance,
+      levels = c("nneighbor", "neighbor")
     )
   ) %>%
-  
   group_by(PDB,protein,proteinclass, Score_Type, near_variable_type) %>%
-  drop_na() %>%
+  drop_na(proteinclass, protein, Score_Type, Score_Value, near_variable_type, variable_distance) %>%
   group_modify(function(.x, .y) {
     data_do <- .x
     
@@ -3093,109 +3681,274 @@ min_var_freq = 0.05
 max_distance_to_var = 10
 min_RSA = 0.2
 
-results_all_radius_classification <- data_predictions_with_variability_normalized %>%
-  group_by(PDB, chain) %>%
+results_all_radius_classification <- results_all_radius %>%
+  drop_na(var_freq, x, y, z) %>%
+  group_by(protein, PDB, chain) %>%
   group_modify(~ get_min_distance_to_var(.x, min_var_freq)) %>%
+  
   mutate(
     min_distance_to_var = case_when(
       min_distance_to_var == Inf ~ NA,
       TRUE ~ min_distance_to_var
     ),
     
-    is_surface = case_when(
-      RSA > min_RSA ~ "yes",
-      TRUE ~ "no"
+    distance_variable_00 = case_when(
+      is.na(closest_var_freq) ~ NA_character_,
+      closest_var_freq >= 0 & min_distance_to_var <= max_residue_distance ~ "neighbor",
+      TRUE ~ "nneighbor"
     ),
-    
-    is_near_var = case_when(
-      min_distance_to_var <= max_distance_to_var ~ "yes",
-      TRUE ~ "no"
+    distance_variable_05 = case_when(
+      is.na(closest_var_freq) ~ NA_character_,
+      closest_var_freq >= 0.05 & min_distance_to_var <= max_residue_distance ~ "neighbor",
+      TRUE ~ "nneighbor"
     )
-    
-  )
+  ) %>%
+  pivot_longer(
+    cols = c(distance_variable_00, distance_variable_05),
+    names_to = "near_variable_type",
+    values_to = "variable_distance"
+  ) %>%
+  mutate(
+    variable_distance = factor(
+      variable_distance,
+      levels = c("nneighbor", "neighbor")
+    )
+  ) 
 
 results_all_radius_classification
 ```
 
 ```{r, fig.width=14}
-p_adjust_method <- "bonferroni"
-
-results_all_radius_classification_means <- results_all_radius_classification %>% 
-  pivot_longer(cols = pivot_list, 
-               names_to = "Score_Type", values_to = "Score_Value") %>%
-  group_by(proteinclass,protein,PDB, Score_Type, is_surface, is_near_var) %>%
-  summarise(
-    mean_score = mean(Score_Value, na.rm = TRUE),
-    n = n()
-  ) %>%
+results_all_radius_classification %>%
+  drop_na(RSA_class, variable_distance) %>%
+  filter(near_variable_type == "distance_variable_05") %>%
   mutate(
-    is_sur.var = factor(
-      interaction(is_surface, is_near_var),
-      levels = c("no.no","no.yes", "yes.no", "yes.yes")
+    is_sur.nb = factor(
+      interaction(RSA_class, variable_distance),
+      levels = c("nsur.nneighbor","nsur.neighbor", "sur.nneighbor", "sur.neighbor")
       )
-    )
-
-results_all_radius_classification_means %>%
-  
-  ggplot(aes(x = is_sur.var, y = mean_score)) +
-  
-  geom_path(aes(group = PDB, col = proteinclass)) +
-  
+    ) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  ggplot(aes(x= is_sur.nb, fill = is_sur.nb, y = Score_Value)) +
   geom_violin(
-    aes(fill = is_sur.var),
-    trim = FALSE, scale = "width", alpha = 0.6, show.legend = FALSE
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
   ) +
-  
   geom_boxplot(
-    width = 0.1, outlier.shape = NA, alpha = 0.8
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
   ) +
-  
-  geom_point(
-    aes(color = proteinclass)
-    ) +
-  
+  #geom_point(aes(color = proteinclass)) +
+  #geom_path(aes(group = structure, color = proteinclass)) +
   stat_compare_means(
-    aes(group = PDB),  
+    comparisons = combn(c("nsur.nneighbor","nsur.neighbor", "sur.nneighbor", "sur.neighbor"), 2, simplify = FALSE),
     method = "wilcox",
     label = "p.signif",
-    comparisons = combn(levels(results_all_radius_classification_means$is_sur.var), 2, simplify = FALSE),
-    p.adjust.method = p_adjust_method
+    hide.ns = FALSE,
+    label.y = seq(1,1.6,by=0.1)
   ) +
-  
-  theme_bw() +
-  
-  facet_wrap(~Score_Type, 
-             #scales = "free_y",
-             nrow=2) +
-  
   labs(
-    title = "Mean score comparisons per Score Type",
-    subtitle = paste0(
-      "minimum variability: ", min_var_freq,
-      ", maximum distance to variable residue: ", max_distance_to_var, " A",
-      ", minimum RSA: ", min_RSA,
-      ", correction: ", p_adjust_method
-    ),
-    y = "Mean Score", 
-    x = "comparison(is surface, is near variable)"
+    x = "",
+    y = "Residue epitope prediction score",
+    title = "Not variable residue neighbor vs variable residue neighbor & surface vs non-surface (wilcox.test)",
+    fill = "Accessibility % Variability"
+  ) +
+  #facet_grid(var_class_type~proteinclass) +
+  facet_grid(~score_label) +
+  scale_fill_manual(
+    values =  c("nsur.nneighbor" = "#D55E00","nsur.neighbor" = "#E69F00", "sur.nneighbor"  = "#0072B2", "sur.neighbor" = "#56B4E9"),
+    labels =  c("nsur.nneighbor" = "non-surface\nnon-neighbor", 
+                "nsur.neighbor" = "non-surface\nneighbor", 
+                "sur.nneighbor" = "surface\nnon-neighbor", 
+                "sur.neighbor" = "surface\nneighbor")
+  ) +
+  scale_x_discrete(
+    labels = c("nsur.nneighbor" = "non-surface\nnon-neighbor", 
+                "nsur.neighbor" = "non-surface\nneighbor", 
+                "sur.nneighbor" = "surface\nnon-neighbor", 
+                "sur.neighbor" = "surface\nneighbor")
   ) +
   
-  scale_fill_manual(
-    values = c("no.no" = "#D55E00","no.yes" = "#E69F00", "yes.no" = "#0072B2", "yes.yes" = "#56B4E9")
-  )
+  geom_text(
+    aes(x=2.5,y=1.65, label = score_label), check_overlap = TRUE, size = 5
+            ) +
+  
+  scale_y_continuous(
+    limits = c(0, 1.75),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
+  theme_bw() +
+  theme(
+    panel.spacing = unit(0, "lines"), 
+    legend.position = "none",
+    panel.grid = element_blank(), 
+    #axis.title.x = ,
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
 
+    strip.background = element_blank(),
+    strip.text = element_blank()
+    )
 ```
 
+```{r, fig.width=14}
+results_all_radius_classification %>%
+  drop_na(RSA_class, variable_distance) %>%
+  filter(near_variable_type == "distance_variable_05") %>%
+  mutate(
+    is_sur.nb = factor(
+      interaction(RSA_class, variable_distance),
+      levels = c("nsur.nneighbor","nsur.neighbor", "sur.nneighbor", "sur.neighbor")
+      )
+    ) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  ggplot(aes(x= is_sur.nb, fill = is_sur.nb, y = Score_Value)) +
+  geom_violin(
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
+  ) +
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
+  ) +
+  #geom_point(aes(color = proteinclass)) +
+  #geom_path(aes(group = structure, color = proteinclass)) +
+  stat_compare_means(
+    comparisons = combn(c("nsur.nneighbor","nsur.neighbor", "sur.nneighbor", "sur.neighbor"), 2, simplify = FALSE),
+    method = "wilcox",
+    label = "p.signif",
+    hide.ns = FALSE,
+    label.y = seq(1,1.6,by=0.1)
+  ) +
+  labs(
+    x = "",
+    y = "Residue epitope prediction score",
+    title = "Not variable residue neighbor vs variable residue neighbor & surface vs non-surface (wilcox.test)",
+    fill = "Accessibility % Variability"
+  ) +
+  #facet_grid(var_class_type~proteinclass) +
+  facet_grid(proteinclass~score_label) +
+  scale_fill_manual(
+    values =  c("nsur.nneighbor" = "#D55E00","nsur.neighbor" = "#E69F00", "sur.nneighbor"  = "#0072B2", "sur.neighbor" = "#56B4E9"),
+    labels =  c("nsur.nneighbor" = "non-surface\nnon-neighbor", 
+                "nsur.neighbor" = "non-surface\nneighbor", 
+                "sur.nneighbor" = "surface\nnon-neighbor", 
+                "sur.neighbor" = "surface\nneighbor")
+  ) +
+  scale_x_discrete(
+    labels = c("nsur.nneighbor" = "non-surface\nnon-neighbor", 
+                "nsur.neighbor" = "non-surface\nneighbor", 
+                "sur.nneighbor" = "surface\nnon-neighbor", 
+                "sur.neighbor" = "surface\nneighbor")
+  ) +
+  
+  #geom_text(
+  #  aes(x=2.5,y=1.65, label = score_label), check_overlap = TRUE, size = 5
+  #          ) +
+  
+  scale_y_continuous(
+    limits = c(0, 1.75),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
+  theme_bw() +
+  theme(
+    panel.spacing = unit(0, "lines"), 
+    legend.position = "none",
+    panel.grid = element_blank(), 
+    #axis.title.x = ,
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+
+    #strip.background = element_blank(),
+    #strip.text = element_blank()
+    )
+```
 
 ```{r, fig.width=14}
+results_all_radius_classification %>%
+  drop_na(RSA_class, variable_distance) %>%
+  filter(near_variable_type == "distance_variable_05") %>%
+  mutate(
+    is_sur.nb = factor(
+      interaction(RSA_class, variable_distance),
+      levels = c("nsur.nneighbor","nsur.neighbor", "sur.nneighbor", "sur.neighbor")
+      )
+    ) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  ggplot(aes(x= is_sur.nb, fill = is_sur.nb, y = Score_Value)) +
+  geom_violin(
+    trim = FALSE, scale = "width", alpha = 0.6, position = position_dodge(width = 0.8)
+  ) +
+  geom_boxplot(
+    width = 0.1, outlier.shape = NA, alpha = 0.8, position = position_dodge(width = 0.8)
+  ) +
+  #geom_point(aes(color = proteinclass)) +
+  #geom_path(aes(group = structure, color = proteinclass)) +
+  stat_compare_means(
+    comparisons = combn(c("nsur.nneighbor","nsur.neighbor", "sur.nneighbor", "sur.neighbor"), 2, simplify = FALSE),
+    method = "wilcox",
+    label = "p.signif",
+    hide.ns = FALSE,
+    label.y = seq(1,1.6,by=0.1)
+  ) +
+  labs(
+    x = "",
+    y = "Residue epitope prediction score",
+    title = "Not variable residue neighbor vs variable residue neighbor & surface vs non-surface (wilcox.test)",
+    fill = "Accessibility % Variability"
+  ) +
+  #facet_grid(var_class_type~proteinclass) +
+  facet_grid(seroprof_titers~score_label) +
+  scale_fill_manual(
+    values =  c("nsur.nneighbor" = "#D55E00","nsur.neighbor" = "#E69F00", "sur.nneighbor"  = "#0072B2", "sur.neighbor" = "#56B4E9"),
+    labels =  c("nsur.nneighbor" = "non-surface\nnon-neighbor", 
+                "nsur.neighbor" = "non-surface\nneighbor", 
+                "sur.nneighbor" = "surface\nnon-neighbor", 
+                "sur.neighbor" = "surface\nneighbor")
+  ) +
+  scale_x_discrete(
+    labels = c("nsur.nneighbor" = "non-surface\nnon-neighbor", 
+                "nsur.neighbor" = "non-surface\nneighbor", 
+                "sur.nneighbor" = "surface\nnon-neighbor", 
+                "sur.neighbor" = "surface\nneighbor")
+  ) +
+  
+  #geom_text(
+  #  aes(x=2.5,y=1.65, label = score_label), check_overlap = TRUE, size = 5
+  #          ) +
+  
+  scale_y_continuous(
+    limits = c(0, 1.75),
+    expand = c(0, 0), 
+    breaks = seq(0,1, by = 0.25),
+    labels = seq(0,1, by = 0.25)
+  ) +
+  theme_bw() +
+  theme(
+    panel.spacing = unit(0, "lines"), 
+    legend.position = "none",
+    panel.grid = element_blank(), 
+    #axis.title.x = ,
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+
+    #strip.background = element_blank(),
+    #strip.text = element_blank()
+    )
+```
+
+```{, fig.width=14}
 p_adjust_method <- "BH"
 
 results_all_radius_classification_means %>%
   filter(Score_Type != "BepiPred-2.0 probability") %>%
   
-  ggplot(aes(x = is_sur.var, y = mean_score)) +
+  ggplot(aes(x = is_sur.var, y = Score_Value)) +
   
-  geom_path(aes(group = PDB, col = proteinclass)) +
+  #geom_path(aes(group = PDB, col = proteinclass)) +
   
   geom_violin(
     aes(fill = is_sur.var),
@@ -3246,5 +3999,118 @@ results_all_radius_classification_means %>%
     axis.line = element_line()
   ) 
 
+```
+
+```{r, figure.width=14}
+prediction %>%
+  drop_na(RSA_class, variable_distance) %>%
+  filter(near_variable_type == "distance_variable_05", var_class_type == "var_class_05",
+         protein %in% ordered_proteins) %>%
+  
+```
+
+
+```{r}
+setdiff(
+  ordered_proteins,
+  results_all_radius_classification %>% filter(protein %in% ordered_proteins) %>% pull(protein) %>% unique
+)
+```
+
+```{r, fig.width=14}
+data_predictions_with_variability_normalized_with_seroprof <- data_predictions_with_variability_normalized %>%
+  left_join(distinct(data_variability_with_seroprof %>% select(protein, seroprof_titers)), by = "protein") 
+  
+```
+
+```{r, fig.width=14}
+lowest_plot <- data_predictions_with_variability_normalized_with_seroprof %>%
+  filter(protein %in% ordered_proteins) %>%
+  mutate(protein = factor(protein, levels = ordered_proteins)) %>%
+  pivot_longer(cols = pivot_list, 
+               names_to = "Score_Type", values_to = "Score_Value") %>%
+  group_by(proteinclass, structure, Score_Type) %>%
+  group_by(seroprof_titers,proteinclass, protein, Score_Type) %>%
+  distinct() %>%
+  summarize(
+    mean_score = mean(Score_Value, na.rm=TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(score_label = score_label_map[Score_Type]) %>%
+  filter(score_label != "BepiPred 2.0") %>%
+  
+  ggplot(aes(x = protein, y = mean_score)) +
+  
+  geom_rect(
+    aes(
+      xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, fill = seroprof_titers
+    ),
+    inherit.aes = FALSE, alpha = 0.3,
+    data = data_variability_with_seroprof %>% distinct(seroprof_titers),
+    show.legend = FALSE  # Exclude facet-based color fill from the legend
+  ) +
+  
+  scale_fill_brewer(palette = "RdYlBu") +
+  
+  new_scale_fill() +
+  
+  geom_col(aes(fill = proteinclass)) +
+  
+  facet_grid(
+    score_label~seroprof_titers,
+    scales = "free_x",
+    space = "free_x",
+    labeller = label_wrap_gen(width = 10)
+  ) +
+  
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)), limits = c(0, 1), breaks = seq(0, 1, by = 0.25) ) +
+  
+  theme_bw() +
+  
+  labs(y = "Mean Normalized Variability", x = NULL) +
+  theme(
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(size = 16), # Adjust facet label text size
+    panel.background = element_rect(fill = "white", colour = "white"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(0, "lines"),
+    axis.line = element_line(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+  
+lowest_plot
+```
+
+```{r, fig.width = 14}
+plot_grid(
+  upper_plot + 
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      plot.margin = margin(t = 5, r = 5, b = 1.5, l = 5)
+    )
+  ,
+  lower_plot + 
+    theme(
+        axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      strip.text = element_blank(),
+      strip.background = element_blank(),
+      legend.position = "none",
+      plot.margin = margin(t = 0, r = 5, b = 1.5, l = 5) 
+    ),
+  lowest_plot + 
+    theme(
+      strip.text.x = element_blank(),
+      strip.background.x = element_blank(),
+      legend.position = "none",
+      plot.margin = margin(t = 0, r = 5, b = 5, l = 5) 
+    ),
+  ncol = 1,
+  align = "v",
+  axis = "rl",
+  rel_heights = c(1, 1, 2)  # adjust height ratio as needed
+)
 ```
 

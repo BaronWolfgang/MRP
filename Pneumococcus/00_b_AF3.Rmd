@@ -403,3 +403,36 @@ AF3_pdb_file <- read.pdb.custom(pdb_entry = "alia_model_4_fold_0", pdb_path = "o
 AF3_pdb_file$atom 
 ```
 
+# Add AF3 to map
+```{r}
+AF3_pdb_files_list <- list.files(AF3_pdbs_path, full.names = FALSE)
+
+map_namesclasspdb_AF3 <- data_namesclasspdb %>% 
+  rowwise() %>%
+  mutate(
+    AF3 = case_when(
+      is.na(PDB) ~ {
+        protein_match <- grep(
+          paste0("^", tolower(protein), "_model_\\d+_fold_\\d+"),
+          tolower(AF3_pdb_files_list),
+          value = TRUE
+        )
+        
+        if (length(protein_match) > 0) {
+          protein_match[1]
+        } else {
+          tigr4_match <- grep(
+            paste0("^", tolower(TIGR4_name), "_model_\\d+_fold_\\d+"),
+            tolower(AF3_pdb_files_list),
+            value = TRUE
+          )
+          if (length(tigr4_match) > 0) tigr4_match[1] else NA_character_
+        }
+      },
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  ungroup()
+
+map_namesclasspdb_AF3
+```

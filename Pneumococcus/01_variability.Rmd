@@ -122,7 +122,25 @@ map_namesclasspdb_aln <- data_namesclasspdb %>%
     )
   ) 
 
-map_namesclasspdb_aln 
+map_namesclasspdb_aln
+```
+
+```{r}
+map_namesclasspdb_aln_AF3 <- left_join(
+  map_namesclasspdb_AF3,
+  map_namesclasspdb_aln 
+)
+
+map_namesclasspdb_aln_AF3
+```
+
+
+
+```{r}
+map_namesclasspdb_aln_AF3 %>% filter(
+  protein %in% 
+    setdiff(map_namesclasspdb_aln$protein %>% unique(), data_DiscoTope$protein %>% unique()) 
+)
 ```
 
 ###test
@@ -355,12 +373,12 @@ full_join(
 ```
 
 ## check out bad matches
-```{}
+```{r}
 data_variability_with_resno <- NULL
 map_aln_resno <- NULL
 
 # only do this for complete cases
-for (protein_name in unique(na.omit(map_namesclasspdb_aln)$protein)[28]) {
+for (protein_name in unique(na.omit(map_namesclasspdb_aln$protein))[11]) {
 cat("\nProcessing protein:", protein_name, "\n")
   
   # Match the filename for the current protein
@@ -388,170 +406,40 @@ cat("\nProcessing protein:", protein_name, "\n")
   
   for (pdb_entry in pdb_entries) {
     print(pdb_entry)
-    pdb_object <- tryCatch({
-      read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
-    }, error = function(e) {
-      warning("Could not read PDB: ", pdb_entry, " — skipping. Reason: ", conditionMessage(e))
-      return(NULL)
-    })
-    
-    if (is.null(pdb_object)) next
-    
-    longest_chain <- pdb_object$atom %>%
-      filter(type == "ATOM",
-             elety == "CA",
-             alt %in% c(NA, "A"),
-             resid %in% toupper(AMINO_ACID_CODE)) %>%
-      add_count(chain, name = "chain_length") %>%
-      arrange(desc(chain_length), chain) %>%
-      filter(chain_length == max(chain_length)) %>%
-      slice_min(chain, with_ties = FALSE) %>%
-      pull(chain)
-
-    
-    if (length(longest_chain) != 1) {
-      warning("Ambiguous chain in PDB:", pdb_entry)
-      next
-    }
-    
-    ca_atoms <- pdb_object$atom %>%
-      filter(type == "ATOM",
-             elety == "CA",
-             chain == longest_chain,
-             alt %in% c(NA, "A"),
-             resid %in% toupper(AMINO_ACID_CODE))
-    
-    new_seq <- str_c(aa321(ca_atoms$resid), collapse = "")
-    names(new_seq) <- pdb_entry
-    pdb_strings <- c(pdb_strings, new_seq)
-    
-    map_aln_resno_subset <- ca_atoms %>% 
-      mutate(
-        PDB = pdb_entry, 
-        protein = unique(na.omit(
-          map_namesclasspdb_aln$protein[map_namesclasspdb_aln$PDB == pdb_entry]
-          )),
-        proteinclass = unique(na.omit(
-          map_namesclasspdb_aln$proteinclass[map_namesclasspdb_aln$PDB == pdb_entry]
-          )),
-        resid_1 = aa321(resid),
-        posno = row_number()
-      ) %>% 
-      select(proteinclass,protein,PDB,chain,resno,resid, posno, resid_1) 
-    
-    if (is.null(map_aln_resno)) {
-      map_aln_resno <- map_aln_resno_subset
-    } else {
-      # Otherwise, rbind the current data to the combined data frame
-      map_aln_resno <- rbind(
-        map_aln_resno, 
-        map_aln_resno_subset
-      )
-    }
-  }
-  
-  if (length(pdb_strings) == 0) {
-    warning("No alignable PDBs for protein: ", protein_name, " — skipping.")
-    next
-  }
-  
-  pdb_stringset <- AAStringSet(pdb_strings, use.names = TRUE)
-  
-  ifelse(
-    length(pdb_stringset) > 1, 
-    pdb_profile <- AlignSeqs(pdb_stringset, terminalGap = -0.1),
-    pdb_profile <- pdb_stringset
-    )
-
-  aligned_profiles <- AlignProfiles(
-    pattern = pdb_profile, 
-    subject = aa_profile,
-    #gapOpening = c(-15,-10), 
-    #gapExtension = -4, 
-    terminalGap = -0.1#,
-  )
-  
-  combined_seqs <- c(pdb_stringset, aa_seqs)
-  aligned_combined <- AlignSeqs(
-    combined_seqs,  
-    #gapOpening = c(-30,-10), 
-    #gapExtension = -3, 
-    terminalGap = -0.1
-    )
-
-  aligned_combined <- AlignSeqs(combined_seqs, terminalGap = -0.1)
-  
-}
-```
-
-```{}
-BrowseSeqs(aligned_combined)
-```
-
-
-### completely redo alignment
-```{r}
-data_variability_with_resno <- NULL
-map_aln_resno <- NULL
-aligned_resno <- NULL
-
-# only do this for complete cases
-for (protein_name in unique(na.omit(map_namesclasspdb_aln)$protein)) {
-  cat("\nProcessing protein:", protein_name, "\n")
-  
-  # Match the filename for the current protein
-  filename <- map_namesclasspdb_aln %>%
-    filter(protein == protein_name) %>%
-    pull(matched_filename) %>% unique()
-  
-  if (length(filename) == 0) {
-    warning("No matching .fas file for protein: ", protein_name)
-    next
-  }
-  
-  # Load existing alignment and remove gaps
-  aa_file <- file.path(AA_alnfiles_path, filename)
-  aa_seqs <- RemoveGaps(readAAStringSet(aa_file))
-  
-  
-  # Get PDB entries corresponding to this protein
-  pdb_entries <- map_namesclasspdb_aln %>% filter(protein == protein_name) %>% pull(PDB)
-  
-  # Collect all sequences from PDB entries
-  pdb_strings <- c()
-  
-  for (pdb_entry in pdb_entries) {
-    print(pdb_entry)
     pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
     
-    longest_chain <- pdb_object$atom %>%
-      filter(type == "ATOM",
-             elety == "CA",
-             alt %in% c(NA, "A"),
-             resid %in% toupper(AMINO_ACID_CODE)) %>%
-      add_count(chain, name = "chain_length") %>%
-      arrange(desc(chain_length), chain) %>%
-      filter(chain_length == max(chain_length)) %>%
-      slice_min(chain, with_ties = FALSE) %>%
-      pull(chain)
-
+    ca_atoms <- reconstruct.ca_atoms(pdb_object)
     
-    if (length(longest_chain) != 1) {
-      warning("Ambiguous chain in PDB:", pdb_entry)
-      next
+    if(!is.null(pdb_object$seqres)) { #use seqres
+      pdb_fasta_sequence <- pdb_object$seqres %>% enframe(name = "chain", value = "resid") %>%
+        add_count(chain, name = "chain_length") %>%
+        arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+        filter(chain_length == max(chain_length)) %>%
+        filter(chain == min(chain)) %>%
+        pull(resid) %>%
+        aa321() %>%
+        str_c(collapse = "")
+      
+    } else { # Use atom data
+      message("No seqres, using atom data")
+      
+      pdb_fasta_sequence <- pdb_object$atom %>%
+        filter(type == "ATOM",
+               elety == "CA",
+               alt %in% c(NA, "A"),
+               resid %in% toupper(AMINO_ACID_CODE)[1:20]) %>%
+        add_count(chain, name = "chain_length") %>%
+        arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+        filter(chain_length == max(chain_length)) %>%
+        filter(chain == min(chain)) %>%
+        pull(resid) %>%
+        aa321() %>%
+        str_c(collapse = "")
+      
     }
     
-    ca_atoms <- pdb_object$atom %>%
-      filter(type == "ATOM",
-             elety == "CA",
-             chain == longest_chain,
-             alt %in% c(NA, "A"),
-             resid %in% toupper(AMINO_ACID_CODE))
-    
-    new_seq <- str_c(aa321(ca_atoms$resid), collapse = "")
-    names(new_seq) <- pdb_entry
-    pdb_strings <- c(pdb_strings, new_seq)
-    
+    names(pdb_fasta_sequence) <- pdb_entry
+    pdb_strings <- c(pdb_strings, pdb_fasta_sequence)
     
     map_aln_resno_subset <- ca_atoms %>% 
       mutate(
@@ -561,11 +449,11 @@ for (protein_name in unique(na.omit(map_namesclasspdb_aln)$protein)) {
           )),
         proteinclass = unique(na.omit(
           map_namesclasspdb_aln$proteinclass[map_namesclasspdb_aln$PDB == pdb_entry]
-          )),
-        resid_1 = aa321(resid),
-        posno = row_number()
+          ))#,
+        #resid_1 = aa321(resid),
+        #posno = row_number()
       ) %>% 
-      select(proteinclass,protein,PDB,chain,resno,resid, posno, resid_1,x,y,z) 
+      select(proteinclass,protein,PDB,chain,resno,resid, seqresno, seqres_resid, x,y,z,b) 
     
     if (is.null(map_aln_resno)) {
       map_aln_resno <- map_aln_resno_subset
@@ -591,17 +479,223 @@ for (protein_name in unique(na.omit(map_namesclasspdb_aln)$protein)) {
 
   aligned_combined <- AlignSeqs(combined_seqs, terminalGap = -0.1)
   
+}
+```
+
+```{r}
+BrowseSeqs(aligned_combined)
+```
+
+
+### completely redo alignment
+```{r}
+data_variability_with_resno <- NULL
+map_aln_resno <- NULL
+aligned_resno <- NULL
+
+# only do this for complete cases
+for (protein_name in sort(unique(na.omit(map_namesclasspdb_aln_AF3$protein)))) {
+  cat("\nProcessing protein:", protein_name, "\n")
+  
+  map_aln_resno <- NULL
+  
+  # Match the filename for the current protein
+  filename <- map_namesclasspdb_aln_AF3 %>%
+    filter(protein == protein_name) %>%
+    pull(matched_filename) %>% unique() %>% na.omit() 
+  
+  if (length(filename) == 0) {
+    warning("No matching .fas file for protein: ", protein_name)
+    next
+  }
+  
+  # Load existing alignment and remove gaps
+  aa_file <- file.path(AA_alnfiles_path, filename)
+  aa_seqs <- RemoveGaps(readAAStringSet(aa_file))
+  
+  pdb_entries <- map_namesclasspdb_aln_AF3 %>% filter(protein == protein_name) %>% pull(PDB) %>% na.omit()
+  
+  # Get PDB entries corresponding to this protein
+  if(length(pdb_entries) > 0) {
+    # Collect all sequences from PDB entries
+    pdb_strings <- c()
+    
+    for (pdb_entry in pdb_entries) {
+      print(pdb_entry)
+      pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+      
+      ca_atoms <- reconstruct.ca_atoms(pdb_object)
+      
+      if(!is.null(pdb_object$seqres)) { #use seqres
+        pdb_fasta_sequence <- pdb_object$seqres %>% enframe(name = "chain", value = "resid") %>%
+          add_count(chain, name = "chain_length") %>%
+          arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+          filter(chain_length == max(chain_length)) %>%
+          filter(chain == min(chain)) %>%
+          pull(resid) %>%
+          aa321() %>%
+          str_c(collapse = "")
+        
+      } else { # Use atom data
+        message("No seqres, using atom data")
+        
+        pdb_fasta_sequence <- pdb_object$atom %>%
+          filter(type == "ATOM",
+                 elety == "CA",
+                 alt %in% c(NA, "A"),
+                 resid %in% toupper(AMINO_ACID_CODE)[1:20]) %>%
+          add_count(chain, name = "chain_length") %>%
+          arrange(desc(chain_length), chain) %>%  # Sort by length (descending), then alphabetically
+          filter(chain_length == max(chain_length)) %>%
+          filter(chain == min(chain)) %>%
+          pull(resid) %>%
+          aa321() %>%
+          str_c(collapse = "")
+      }
+      
+      names(pdb_fasta_sequence) <- pdb_entry
+      pdb_strings <- c(pdb_strings, pdb_fasta_sequence)
+      
+      map_aln_resno_subset <- ca_atoms %>% 
+        mutate(
+          structure = pdb_entry,
+          protein = unique(na.omit(
+            map_namesclasspdb_aln_AF3$protein[map_namesclasspdb_aln_AF3$PDB == pdb_entry]
+          )),
+          proteinclass = unique(na.omit(
+            map_namesclasspdb_aln_AF3$proteinclass[map_namesclasspdb_aln_AF3$PDB == pdb_entry]
+          ))#,
+          #resid_1 = aa321(resid),
+          #posno = row_number()
+        ) %>% 
+        select(proteinclass,protein,structure,chain,resno,resid, seqresno, seqres_resid, x, y, z, b) 
+      
+      if (is.null(map_aln_resno)) {
+        map_aln_resno <- map_aln_resno_subset
+      } else {
+        # Otherwise, rbind the current data to the combined data frame
+        map_aln_resno <- rbind(
+          map_aln_resno, 
+          map_aln_resno_subset
+        )
+      }
+    } 
+  
+  pdb_stringset <- AAStringSet(pdb_strings, use.names = TRUE)
+  
+  # Combine and align
+  combined_seqs <- c(pdb_stringset, aa_seqs)
+  aligned_combined <- AlignSeqs(
+    combined_seqs,  
+    #gapOpening = c(-30,-10), 
+    #gapExtension = -3, 
+    terminalGap = -0.1
+    )
+  
+  } else {
+  warning(paste(protein_name, " has no PDBs. Attempting AF3 fallback..."))
+
+  # Get potential match names: protein + TIGR4
+  potential_names <- map_namesclasspdb_aln_AF3 %>%
+    filter(protein == protein_name) %>%
+    select(protein, TIGR4_name) %>%
+    unlist(use.names = FALSE) %>%
+    unique() %>%
+    na.omit()
+  
+  match_idx <- grep(
+    pattern = paste0("^(", paste0(tolower(potential_names), collapse = "|"), ")_model_\\d+_fold_\\d+"),
+    x = tolower(AF3_pdb_files_list)
+  )
+  
+  if (length(match_idx) == 0) {
+    warning("No AF3 model found for protein: ", protein_name)
+    next
+  }
+  
+  used_pdb_id <- AF3_pdb_files_list[match_idx[1]]
+  message("Using AF3 model: ", used_pdb_id)
+
+  pdb_object <- read.pdb.custom(pdb_entry = tools::file_path_sans_ext(used_pdb_id), pdb_path = AF3_pdbs_path)
+  
+  ca_atoms <- reconstruct.ca_atoms(pdb_object)
+
+  # Reuse seqres or atom logic
+  if (!is.null(pdb_object$seqres)) {
+    pdb_fasta_sequence <- pdb_object$seqres %>%
+      enframe(name = "chain", value = "resid") %>%
+      add_count(chain, name = "chain_length") %>%
+      arrange(desc(chain_length), chain) %>%
+      filter(chain_length == max(chain_length)) %>%
+      filter(chain == min(chain)) %>%
+      pull(resid) %>%
+      aa321() %>%
+      str_c(collapse = "")
+  } else {
+    message("No seqres, using atom data")
+    pdb_fasta_sequence <- pdb_object$atom %>%
+      filter(type == "ATOM",
+             elety == "CA",
+             alt %in% c(NA, "A"),
+             resid %in% toupper(AMINO_ACID_CODE)[1:20]) %>%
+      add_count(chain, name = "chain_length") %>%
+      arrange(desc(chain_length), chain) %>%
+      filter(chain_length == max(chain_length)) %>%
+      filter(chain == min(chain)) %>%
+      pull(resid) %>%
+      aa321() %>%
+      str_c(collapse = "")
+  }
+  
+  names(pdb_fasta_sequence) <- used_pdb_id
+  pdb_strings <- c(pdb_fasta_sequence)  # AF3 version only has one structure
+  
+  map_aln_resno_subset <- ca_atoms %>%
+    mutate(
+      structure = used_pdb_id,
+      protein = protein_name,
+      proteinclass = unique(na.omit(
+        map_namesclasspdb_aln$proteinclass[map_namesclasspdb_aln$protein == protein_name]
+      ))
+    ) %>%
+    select(proteinclass, protein, structure, chain, resno, resid, seqresno, seqres_resid, x, y, z, b)
+
+  if (is.null(map_aln_resno)) {
+    map_aln_resno <- map_aln_resno_subset
+  } else {
+    map_aln_resno <- rbind(map_aln_resno, map_aln_resno_subset)
+  }
+
+  pdb_stringset <- AAStringSet(pdb_strings, use.names = TRUE)
+  combined_seqs <- c(pdb_stringset, aa_seqs)
+  aligned_combined <- AlignSeqs(combined_seqs, terminalGap = -0.1)
+}
+
+  
+  aligned_combined <- AlignSeqs(combined_seqs, terminalGap = -0.1)
+  
   aligned_new_seqs <- aligned_combined[names(pdb_strings)]
   
   aligned_pdb_df  <- aligned_new_seqs %>%
     as.character() %>%
-    enframe(name = "PDB", value = "aligned_resid_seq") %>%
-    mutate(aligned_resid = strsplit(aligned_resid_seq, "")) %>%
-    select(-aligned_resid_seq) %>%
-    unnest(aligned_resid) %>%
-    group_by(PDB) %>%
+    enframe(name = "structure", value = "seq") %>%  # Turn it into a tibble
+    rowwise() %>%
+    mutate(
+      protein = protein_name,
+      proteinclass = unique(na.omit(
+        map_namesclasspdb_aln$proteinclass[map_namesclasspdb_aln$protein == protein_name]
+      )),
+      aligned_seq_resid = strsplit(seq, "")
+    ) %>%
+    select(-seq) %>%
+    unnest(aligned_seq_resid) %>%
+    group_by(structure) %>%
     mutate(aligned_posno = row_number(),
-           nogap_posno = cumsum(aligned_resid != "-")) %>%
+           nogap_posno = case_when(
+             aligned_seq_resid == "-" ~ NA,
+             aligned_seq_resid != "-" ~ cumsum(aligned_seq_resid != "-")
+                                   ),
+           aligned_seq_resid = aa123(aligned_seq_resid)) %>%
     ungroup()
   
   aligned_no_pdb <- aligned_combined[!names(aligned_combined) %in% names(pdb_strings)]
@@ -611,8 +705,18 @@ for (protein_name in unique(na.omit(map_namesclasspdb_aln)$protein)) {
   aligned_resno_df <- full_join(
     map_aln_resno,
     aligned_pdb_df,
-    by = c("PDB", "posno" = "nogap_posno", "resid_1" = "aligned_resid")
-  )
+    by = c("proteinclass","protein","structure", "seqresno" = "nogap_posno")
+  ) %>%
+    mutate(
+      PDB = case_when(
+        structure %in% map_namesclasspdb_aln_AF3$PDB ~ structure,
+        TRUE ~ NA
+      ),
+      AF3 = case_when(
+        structure %in% map_namesclasspdb_aln_AF3$AF3 ~ structure,
+        TRUE ~ NA
+      )
+    )
   
   aligned_resno_subset <- full_join(
     aligned_resno_df,
@@ -628,37 +732,40 @@ for (protein_name in unique(na.omit(map_namesclasspdb_aln)$protein)) {
   
 }
 
-aligned_resno <- aligned_resno %>%
-  mutate(
-    protein = if_else(
-      is.na(protein),
-      data_namesclasspdb$protein[match(PDB, data_namesclasspdb$PDB)],
-      protein
-    ),
-    proteinclass = if_else(
-      is.na(proteinclass),
-      data_namesclasspdb$proteinclass[match(PDB, data_namesclasspdb$PDB)],
-      proteinclass
-    )
-  )
-
 aligned_resno
 ```
 
+```{r}
+aligned_resno %>% filter(protein == "AliA")
+```
+
+
+```{r}
+write.csv(
+  aligned_resno,
+  "output/data_variability.csv", 
+  row.names=FALSE
+)
+```
 
 #### calculate mismatch
 ```{r}
-mismatch <- aligned_resno %>%
-  select(proteinclass, protein, PDB, chain, resno, resid, consensus_res, residue_tables) %>%
-  na.omit() %>%
-  mutate(mapcheck = consensus_res == aa321(resid),
+data_variability <- read.csv("output/data_variability.csv")
+```
+
+
+```{r}
+mismatch <- data_variability %>%
+  select(proteinclass, protein, PDB, chain, resno, resid, seqres_resid,consensus_res, residue_tables) %>%
+  na.omit(seqres_resid) %>%
+  mutate(mapcheck = consensus_res == aa321(seqres_resid),
          mapcheck_full = mapply(function(x, y) {
       if (is.na(y) || y == "") {
         NA
       } else {
         grepl(x, y)
       }
-    }, aa321(resid), residue_tables)
+    }, aa321(seqres_resid), residue_tables)
   ) %>%
   group_by(PDB, protein) %>%
   summarize(
@@ -680,7 +787,6 @@ AA_fasfiles
 
 AA_alnfiles_path
 ```
-
 
 ```{r, warning=FALSE}
 data_variability <- NULL
@@ -720,6 +826,9 @@ data_variability
 ```
 
 
+```{r}
+data_variability %>% filter(is.na(proteinclass))
+```
 
 
 #missing proteins
@@ -736,11 +845,6 @@ proteins_without_structure
 saveRDS(proteins_without_structure, file = "data/variable_proteins_without_structure.rds")
 ```
 
-```{r}
-write.csv(data_variability,
-          "output/data_variability.csv", 
-          row.names=FALSE)
-```
 
 
 # plot
@@ -858,10 +962,6 @@ for (proteinindex in unique(data_variability$protein)) {
 ```
 
 # summary statistics
-```{r}
-data_variability %>% pull(protein) %>% unique()
-```
-
 
 ```{r}
 data_variability <- read.csv("output/data_variability.csv")
@@ -873,15 +973,15 @@ data_variability
 ```{r}
 data_variability_with_seroprof <- data_variability %>%
   mutate(
-    protein = case_when(
+    protein_adj = case_when(
       protein == "Pneumolysin" ~ "Ply",
       TRUE ~ protein
     ),
     seroprof_titers = factor(
       case_when(
-        protein %in% c("Ply", "Hic2", "PspA", "SP_2063", "PpmA", "PnrA", "LytC", "SP_0107", "PavB", "AmiA", "AliC", "AliB", "PsaA", "PhtD", "PcsB", "PrtA2", "PcpA", "PspC") ~ "High",
-        protein %in% c("PitB", "PccL", "PiaA", "PfbA", "LytA", "GlpO", "AliA", "PhpP", "PstS2", "SlrA", "CbpL", "CbpC", "CbpE", "DacB", "NanA") ~ "Intermediate",
-        protein %in% c("MetQ", "MalX", "Enolase", "AliD", "SP_0699", "SP_1069", "NgtS", "RrgB", "RrgA", "MsrAB2", "GshT", "AdcAII", "TrxB", "SP_2141", "SP_0060", "Etrx2", "SP_0191", "LytB", "PepO", "SP_1992", "Etrx1") ~ "Low",
+        protein_adj %in% c("Ply", "Hic2", "PspA", "SP_2063", "PpmA", "PnrA", "LytC", "SP_0107", "PavB", "AmiA", "AliC", "AliB", "PsaA", "PhtD", "PcsB", "PrtA2", "PcpA", "PspC") ~ "High",
+        protein_adj %in% c("PitB", "PccL", "PiaA", "PfbA", "LytA", "GlpO", "AliA", "PhpP", "PstS2", "SlrA", "CbpL", "CbpC", "CbpE", "DacB", "NanA") ~ "Intermediate",
+        protein_adj %in% c("MetQ", "MalX", "Enolase", "AliD", "SP_0699", "SP_1069", "NgtS", "RrgB", "RrgA", "MsrAB2", "GshT", "AdcAII", "TrxB", "SP_2141", "SP_0060", "Etrx2", "SP_0191", "LytB", "PepO", "SP_1992", "Etrx1") ~ "Low",
         TRUE ~ NA_character_
       ),
       levels = c("High", "Intermediate", "Low")
@@ -890,6 +990,15 @@ data_variability_with_seroprof <- data_variability %>%
 
 data_variability_with_seroprof
 
+```
+
+```{r}
+data_variability %>% filter(is.na(protein)) 
+```
+
+
+```{r}
+data_variability %>% pull(protein) %>% unique()
 ```
 
 ```{r}
@@ -905,6 +1014,7 @@ ordered_proteins <- data_variability_with_seroprof %>%
 ```{r, fig.width=14}
 upper_plot <- data_variability_with_seroprof %>%
   select(seroprof_titers, proteinclass,protein,n_seq,seq_length) %>%
+  drop_na(protein) %>%
   distinct() %>%
   group_by(seroprof_titers) %>%
   arrange(desc(n_seq)) %>% 
@@ -963,7 +1073,9 @@ upper_plot
 min_var_freq = 0.05
 
 lower_plot <- data_variability_with_seroprof %>%
+  drop_na(protein) %>%
   group_by(seroprof_titers,proteinclass, protein, seq_length) %>%
+  distinct() %>%
   summarize(
     nonzero_var_count = sum(var_freq > min_var_freq),
     .groups = "drop"
@@ -1039,5 +1151,3 @@ plot_grid(
   rel_heights = c(1, 0.5)  # adjust height ratio as needed
 )
 ```
-
-

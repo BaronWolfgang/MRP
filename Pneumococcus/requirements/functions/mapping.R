@@ -113,26 +113,7 @@ create.resmap <- function(pdb_atom_df, epitope_prediction_df,required_adjustment
 #For mapping variability to our epitope prediction data, we need a slightly different method as the consensus sequence of the variability data isn't guaranteed to match the prediction data
 ########
 map.seq.to.pdb <- function(sequence_AA1, pdb_object, alignment_method = "overlap") {
-  longest_chain <- pdb_object$atom %>%
-    filter(type == "ATOM",
-           elety == "CA",
-           alt %in% c(NA, "A"),
-           resid %in% toupper(AMINO_ACID_CODE)) %>%
-    add_count(chain, name = "chain_length") %>%
-    arrange(desc(chain_length), chain) %>%
-    filter(chain_length == max(chain_length)) %>%
-    filter(chain == min(chain)) %>%
-    pull(chain) %>%
-    unique()
-  
-  ca_atoms <- pdb_object$atom %>%
-    filter(
-      type == "ATOM",
-      elety == "CA",
-      chain == longest_chain,
-      alt %in% c(NA, "A"),
-      resid %in% toupper(AMINO_ACID_CODE)
-    )
+  ca_atoms <- reconstruct.ca_atoms(pdb_object)
   
   subject <- aa321(ca_atoms$resid)
   names(subject) <- ca_atoms$resno
@@ -153,7 +134,7 @@ map.seq.to.pdb <- function(sequence_AA1, pdb_object, alignment_method = "overlap
   return(alignment)
 }
 
-create.resmap.variability <- function(pdb_atoms_df, variability_df, alignment) {
+create.resmap.v2 <- function(pdb_atoms_df, data_df, alignment) {
   aligned_pattern <- as.character(alignedPattern(alignment))
   aligned_subject <- as.character(alignedSubject(alignment))
   
@@ -192,9 +173,8 @@ create.resmap.variability <- function(pdb_atoms_df, variability_df, alignment) {
   
   resmap <- full_join(
     alignment_df,
-    variability_df, 
+    data_df, 
     by = c("position")
-    #by = c("position")
     )
   
   return(resmap)
