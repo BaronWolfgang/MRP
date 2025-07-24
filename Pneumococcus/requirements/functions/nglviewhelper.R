@@ -3,10 +3,9 @@
 ###
 
 # prediction viewer
-prediction.viewer <- function(pdb_entry, directory, chain, sele_color_df=NULL) {
+prediction.viewer <- function(file_path, chain, annotation_df=NULL) {
   #view_mode = c("colorValue","residueindex")
   
-  file_path <- paste0(directory,pdb_entry,".pdb")
   sele <- paste0(":", chain)
   
   view <- NGLVieweR(file_path) %>%
@@ -16,17 +15,17 @@ prediction.viewer <- function(pdb_entry, directory, chain, sele_color_df=NULL) {
                                    sele = sele)
     ) 
   
-  if(!is.null(sele_color_df)) {
+  if(!is.null(annotation_df)) {
     # view_mode == "colorValue" expects a dataframe with columns $resno_string, containing the selected residues to be colored, and $color containing the desired color 
     
-    for (row in 1:nrow(sele_color_df)) {
-      if (sele_color_df$color[row] == "residueindex") {
+    for (row in 1:nrow(annotation_df)) {
+      if (annotation_df$color[row] == "residueindex") {
         view <- view %>%
           addRepresentation(
             "surface",  # Add surface representation once
             param = list(
-              sele = sele_color_df$resno_string[row],
-              colorScheme = sele_color_df$color[row]
+              sele = annotation_df$resno_string[row],
+              colorScheme = annotation_df$color[row]
             )
           )
       }
@@ -35,8 +34,8 @@ prediction.viewer <- function(pdb_entry, directory, chain, sele_color_df=NULL) {
           addRepresentation(
             "surface",  # Add surface representation once
             param = list(
-              sele = sele_color_df$resno_string[row],
-              colorValue = sele_color_df$color[row]
+              sele = annotation_df$resno_string[row],
+              colorValue = annotation_df$color[row]
             )
           )
       }

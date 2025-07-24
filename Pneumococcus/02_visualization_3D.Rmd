@@ -1,0 +1,489 @@
+---
+title: "Streptococcus pneumoniae epitope visualization"
+author: "Jan Paul van Meenen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+#Packages
+```{r}
+source("requirements/packages.R")
+```
+
+#Functions
+```{r}
+function_files <- list.files(path = "requirements/functions", pattern = "\\.R$",full.names = TRUE)
+
+for (function_file in function_files) {
+  source(function_file)
+}
+```
+#Shiny
+##load predictions
+```{r}
+data_predictions_with_variability <- read.csv("output/data_predictions_with_variability.csv")
+```
+
+
+##load pdbs
+```{r}
+library(shiny)
+
+pdb_paths <- c(
+  list.files("data/pdb", pattern = "\\.pdb$", full.names = TRUE),
+  list.files("output/AlphaFold3/generated_pdb/vws", pattern = "\\.pdb$", full.names = TRUE)
+)
+
+pdb_annotation_csv <- "output/data_predictions_with_variability.csv"
+pdb_annotation_df <- read_csv(pdb_annotation_csv) %>%
+  mutate(structure = tools::file_path_sans_ext(structure))
+
+num_bins <- 21
+```
+
+
+```{r}
+data_predictions_with_variability %>%
+  filter(PDB == "1W6T")
+
+```
+
+
+```{r}
+ui <- fluidPage(
+  uiOutput("dynamic_title"),
+  sidebarLayout(
+    
+    sidebarPanel(
+      selectInput("pdb_file", "Select PDB", 
+                  choices = setNames(pdb_paths, tools::file_path_sans_ext(basename(pdb_paths)))
+                  ),
+      
+      selectInput(
+        "type", "Type", c("ball+stick", "cartoon", "ribbon","surface"),
+        selected = "surface"
+        ),
+      
+      selectInput(
+        "viewmode","View mode", 
+        colnames(pdb_annotation_df[sapply(pdb_annotation_df, is.numeric)]), 
+      ),
+      
+      selectInput("viewmethod", "View method", c("score", "topn", "threshold")),
+      
+      conditionalPanel(
+        condition = "input.viewmethod == 'topn'",
+        sliderInput("topn_value", "Top n%", 
+                    min = 0, max= 100, value = 25, step = 5)
+      ),
+      conditionalPanel(
+        condition = "input.viewmethod == 'threshold'",
+        uiOutput("threshold_slider_ui")
+      ),
+      
+      checkboxInput("normalize", "Normalize values", value = FALSE),
+      
+      actionButton("add", "Add"),
+      actionButton("remove", "Remove")
+      
+      
+    ),
+    mainPanel(
+      verbatimTextOutput('selection'),
+      plotOutput("score_plot", height = "200px"),
+      NGLVieweROutput("structure", height = "500px")
+    )
+  )
+)
+
+server <- function(input, output) {
+  structure_id <- reactive({
+    req(input$pdb_file)
+    tools::file_path_sans_ext(basename(input$pdb_file))
+  })
+  
+  data_reactive <- reactive({
+    req(structure_id())
+    pdb_annotation_df %>%
+      filter(structure == structure_id()) %>%
+      drop_na(chain, resno) #will not be rendered if missing from PDB 
+  })
+  
+  sele <- reactiveValues()
+  vline_resno <- reactiveVal(NULL)
+  
+  observe({
+    sele$resi <-
+      str_extract(input$structure_selection, "(?<=[]])(.*?)(?=[:])")
+    sele$aa <-
+      str_extract(input$structure_selection, "(?<=[\\[])(.*?)(?=\\])")
+    
+    vline_resno(sele$resi)
+  })
+  
+  output$selection = renderPrint({
+    cat(
+      "Selected residue:\n",
+      sele$resi, "\n",
+      sele$aa, "\n"
+    )
+  })
+  
+  output$dynamic_title <- renderUI({
+    req(data_reactive())
+    data <- data_reactive()
+    protein_name <- unique(data$protein)
+    titlePanel(
+      paste0("Structure: ", structure_id(), ", ",
+             protein_name)
+    )
+  })
+  
+  output$threshold_slider_ui <- renderUI({
+    req(input$viewmode)
+    data <- data_reactive()
+    selected_column <- input$viewmode
+    
+    values <- data[[selected_column]]
+    if (isTRUE(input$normalize)) {
+      values <- scales::rescale(values, to = c(0, 1))
+    }
+    
+    values <- values[!is.na(values)]
+    if (length(values) == 0) return(NULL)
+    
+    sliderInput("threshold_value", "Threshold",
+                min = min(values),
+                max = max(values),
+                value = median(values),
+                step = 0.01)
+  })
+  
+  output$score_plot <- renderPlot({
+    req(input$viewmode)
+    data <- data_reactive()
+    selected_column <- input$viewmode
+    
+    if (isTRUE(input$normalize)) {
+      data$view <- scales::rescale(data[[selected_column]], to = c(0, 1))
+    } else {
+      data$view <- data[[selected_column]]
+    }
+    
+    if (input$viewmethod == "score") {
+      # Bin into colors
+      num_bins <- 21
+      data$bin <- cut(data$view, breaks = num_bins, labels = FALSE)
+      palette <- colorRampPalette(c("blue", "white", "red"))(num_bins)
+      data$color <- palette[data$bin]
+    } else {
+      # Use a default color if not score mode
+      res_colors_df <- get_residueindex_colors(data$resno)
+  # Join colors to data by resno
+      data <- dplyr::left_join(data, res_colors_df, by = "resno")
+    }
+    
+    p <- ggplot(data, aes(x = seqresno, y = view)) +
+      geom_col(aes(fill = color), width = 1) +
+      scale_fill_identity() +  # use the literal colors in 'color' column
+      labs(
+        x = "Residue Number",
+        y = selected_column,
+        title = paste("Per-residue", selected_column)
+      ) +
+      theme_bw() +
+      theme(
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()
+        
+      )
+    
+    # Add threshold line dynamically if applicable
+    if (input$viewmethod == "threshold" && !is.null(input$threshold_value)) {
+      p <- p + geom_hline(
+        yintercept = input$threshold_value,
+        color = "red",
+        linetype = "dashed"
+      )
+    }
+    
+    if (input$viewmethod == "topn" && !is.null(input$topn_value)) {
+      topn_cutoff <- quantile(data$view, probs = 1 - input$topn_value / 100, na.rm = TRUE)
+      p <- p + geom_hline(
+        yintercept = topn_cutoff,
+        color = "red",
+        linetype = "dashed"
+      )
+    }
+    
+    if (!is.null(vline_resno())) {
+      selected_seqres <- data$seqresno[data$resno == as.numeric(vline_resno())]
+      if (length(selected_seqres) > 0) {
+        p <- p + geom_vline(
+          xintercept = selected_seqres,
+          color = "black",
+          linetype = "dashed"
+        )
+      }
+    }
+    
+    p
+  })
+  
+  output$structure <- renderNGLVieweR({
+    data <- data_reactive()
+    
+    NGLVieweR(input$pdb_file) %>%
+      addRepresentation("cartoon",
+                        param = list(name = "cartoon", 
+                                     colorScheme = "residueindex",
+                                     sele = paste0("/0 AND :",                                                   unique(na.omit(data$chain)))
+                        )
+      ) %>%
+      stageParameters(backgroundColor = "white") %>%
+      setQuality("low") %>%
+      setFocus(0) 
+  })
+  
+  proxy <- NGLVieweR_proxy("structure")
+  
+  observeEvent(
+    {
+      input$remove
+      input$viewmode
+      input$viewmethod
+      input$pdb_file
+    }, {
+      # Remove all previously added color selections
+      for (i in 1:num_bins) {
+        proxy %>%
+          removeSelection(paste0("sel", i))
+      }
+      proxy %>%
+        removeSelection("threshold") %>%
+        removeSelection("topn")
+    })
+  
+  observeEvent(
+    {
+      input$remove
+      input$pdb_file
+    }, {
+      vline_resno(NULL)
+      proxy %>% updateFocus(0)
+    })
+  
+  observeEvent({
+    input$add 
+    input$viewmethod
+    input$normalize
+  }, {
+    req(input$viewmode)  # ensure viewmode is selected
+    
+    # 1. Normalize the selected column
+    selected_column <- input$viewmode
+    
+    data <- data_reactive()
+    if (isTRUE(input$normalize)) {
+      data$view <- scales::rescale(data[[selected_column]], to = c(0, 1))
+    } else {
+      data$view <- data[[selected_column]]
+    }
+    
+    if(input$viewmethod == "score") {
+      # 2. Bin into 21 bins
+      data$bin <- cut(data$view, breaks = num_bins, labels = FALSE)
+      
+      # 3. Generate RWB color palette
+      custom_palette <- colorRampPalette(c("blue", "white", "red"))(num_bins)
+      data$color <- custom_palette[data$bin]
+      palette
+      # 4. Build NGL selection strings
+      data$sele <- paste0(data$resno)
+      
+      # 5. Group by color
+      color_groups <- data %>%
+        dplyr::group_by(color) %>%
+        dplyr::summarise(
+          sele = paste0(sele, collapse = " "),
+          .groups = "drop"
+        )
+      
+      
+      for (i in seq_len(nrow(color_groups))) {
+        proxy <- proxy %>%
+          addSelection(input$type,
+                       param = list(
+                         name = paste0("sel", i),
+                         sele = paste0(
+                           "/0 AND :",
+                           unique(na.omit(data$chain)),
+                           " AND (",
+                           color_groups$sele[i],
+                           ")"
+                           ),
+                         colorValue = color_groups$color[i]
+                       )
+          )
+      }
+    }
+    else if(input$viewmethod == "threshold") {
+      req(!is.na(input$threshold_value))
+      
+      top_residues <- data %>% filter(view >= input$threshold_value)
+      
+      sele_string <- paste0(top_residues$resno, collapse = " ")
+      
+      proxy <- proxy %>%
+        addSelection(input$type,
+                     param = list(
+                       name = "threshold",
+                       sele = paste0(
+                           "/0 AND :",
+                           unique(na.omit(data$chain)),
+                           " AND (",
+                           sele_string,
+                           ")"
+                           ),
+                       colorScheme = "residueindex"
+                     )
+        )
+    }
+    
+    else if(input$viewmethod == "topn") {
+      req(!is.na(input$topn_value))
+      
+      upper_quantile <- 1 - input$topn_value/100
+      
+      quantile_threshold <- quantile(data$view, prob = upper_quantile, na.rm = TRUE) 
+      
+      top_residues <- data %>% filter(view >= quantile_threshold)
+      
+      sele_string <- paste0(top_residues$resno, collapse = " ")
+      
+      proxy <- proxy %>%
+        addSelection(input$type,
+                     param = list(
+                       name = "topn",
+                       sele = paste0(
+                           "/0 AND :",
+                           unique(na.omit(data$chain)),
+                           " AND (",
+                           sele_string,
+                           ")"
+                           ),
+                       colorScheme = "residueindex"
+                     )
+        )
+    }
+  })
+    
+    observeEvent({
+      input$topn_value
+      input$threshold_value
+      input$normalize
+    }, {
+      req(input$viewmode)
+      
+      selected_column <- input$viewmode
+      
+      data <- data_reactive()
+      if (isTRUE(input$normalize)) {
+        data$view <- scales::rescale(data[[selected_column]], to = c(0, 1))
+      } else {
+        data$view <- data[[selected_column]]
+      }
+      
+      proxy <- NGLVieweR_proxy("structure")
+      
+      if (input$viewmethod == "topn") {
+        req(!is.na(input$topn_value))
+        quantile_threshold <- quantile(data$view, probs = 1 - input$topn_value / 100, na.rm = TRUE)
+        top_residues <- data %>% filter(view >= quantile_threshold)
+        sele_string <- paste0(top_residues$resno, ":", top_residues$chain, collapse = " or ")
+        
+        proxy %>%
+          updateSelection("topn", 
+                          sele = paste0(
+                            "/0 AND :",
+                            unique(na.omit(data$chain)),
+                            " AND (",
+                            sele_string,
+                            ")"
+                          )
+          )
+        
+        
+      } else if (input$viewmethod == "threshold") {
+        req(!is.na(input$threshold_value))
+        top_residues <- data %>% filter(view >= input$threshold_value)
+        sele_string <- paste0(top_residues$resno, ":", top_residues$chain, collapse = " or ")
+        
+        proxy %>%
+          updateSelection("threshold", 
+                          sele = paste0(
+                            "/0 AND :",
+                            unique(na.omit(data$chain)),
+                            " AND (",
+                            sele_string,
+                            ")"
+                          )
+          )
+      }
+    })
+    
+  }
+  shinyApp(ui, server)
+```
+
+```{r}
+for(
+  pdb_entry in unique(na.omit(data_predictions_with_variability_normalized$PDB))
+    ) {
+  
+  pdb_file <- paste0("data/pdb/",pdb_entry,".pdb")
+  pdb_annotation_df <- data_predictions_with_variability %>% 
+    filter(PDB == pdb_entry) %>%
+    drop_na(chain, resno)
+  
+  plot <- pdb_annotation_df %>% 
+    drop_na(chain, `DiscoTope-3.0_calibrated_score`) %>%
+    mutate(scaled_score = rescale(`DiscoTope-3.0_calibrated_score`)) %>%
+    arrange(scaled_score) %>%
+    mutate(row_id = row_number()) %>%
+    ggplot(aes(x = row_id/max(row_id), y = `DiscoTope-3.0_calibrated_score`)) +
+    geom_col(fill = "steelblue") +
+    scale_x_continuous(expand = c(0,0)) +
+    scale_y_continuous(expand = c(0,0)) +
+    geom_vline(aes(xintercept = 0.9, color = "Top 10%"), 
+               linetype = "dashed", size = 1) +
+    
+    geom_hline(aes(yintercept = max(scaled_score)/2, color = "50% max"), 
+               linetype = "dashed", size = 1) +
+    
+    geom_hline(aes(yintercept = 1.5, color = "Higher confidence (1.5)"), 
+               linetype = "dashed", size = 1) +
+    
+    geom_hline(aes(yintercept = 0.9, color = "Moderate confidence (0.9)"), 
+               linetype = "dashed", size = 1) +
+    
+    geom_hline(aes(yintercept = 0.4, color = "Lower confidence (0.4)"), 
+               linetype = "dashed", size = 1) +
+    
+    scale_color_manual(
+      name = NULL,  # Set to NULL to hide the legend (or give a title if you want)
+      values = c(
+        "Top 10%" = "red",
+        "50% max" = "darkgreen",
+        "Higher confidence (1.5)" = "black",
+        "Moderate confidence (0.9)" = "darkgray",
+        "Lower confidence (0.4)" = "lightgray"
+    )
+  ) +
+    
+    theme_bw() +
+    labs(x="quantile", title = paste0(unique(pdb_annotation_df$protein)))
+  
+  print(plot)
+}
+```

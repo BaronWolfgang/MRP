@@ -9,3 +9,7 @@ if (!dir.exists(DNA_alnfiles_path)) dir.create(DNA_alnfiles_path, recursive = TR
 
 AA_alnfiles_path <- "data/bioedit/fas/AA"
 if (!dir.exists(AA_alnfiles_path)) dir.create(AA_alnfiles_path, recursive = TRUE)
+
+pdb_files_list <- list.files(pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)
+
+AF3_pdb_files_list <- list.files(AF3_pdbs_path, pattern = "\\.pdb$") %>% sub("\\.pdb$", "", .)

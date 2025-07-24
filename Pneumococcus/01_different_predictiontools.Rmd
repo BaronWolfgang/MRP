@@ -625,7 +625,7 @@ data_interpro <- read_tsv(
 ```
 
 ```{r}
-data_interpro %>% filter(Protein_accession == "4QQQ") %>%
+data_interpro %>% filter(Protein_accession == "alia_model_4_fold_0.pdb") %>%
   select(Analysis, Signature_description, InterPro_accession, Start, End, Score) %>%
   arrange(-log10(Score))
 ```
@@ -653,6 +653,11 @@ data_interpro %>%
   distinct(Protein_accession, Analysis, present, Score) %>%  # Avoid duplicates
   pivot_wider(names_from = Analysis, values_from = Score, values_fill = NA)
 ```
+
+```{r}
+data_interpro %>% pull(Protein_accession) %>% unique()
+```
+
 
 ```{r, fig.width=14, warning=FALSE}
 charweight = 0.3
@@ -741,12 +746,12 @@ for (protein in sort(unique(data_interpro$Protein_accession))) {
 We want to build up annotation, using the most significant (based on E-value) non-overlapping domain hits
 
 ```{r}
-Analysis_selection <- c(
-  
-)
+Analysis_remove_selection <- c(
+  "CDD"
+  )
 
 data_interpro %>%
-  filter(Analysis %in% Analysis_selection) %>%
+  filter(!Analysis %in% Analysis_remove_selection) %>%
   group_by(Protein_accession) %>%
   mutate(Description = case_when(
              InterPro_description != "-" ~ InterPro_description,
@@ -823,7 +828,11 @@ data_interpro_filtered <- data_interpro %>%
              TRUE ~ InterPro_description
              )
          ) %>%
-  filter(!is.na(Description), Description != "-") %>%
+  filter(
+    !is.na(Description), 
+    Description != "-",
+    !Analysis %in% Analysis_remove_selection
+    ) %>%
   arrange(Protein_accession, Score) %>%
   group_modify(~ keep_non_overlapping(.x)) %>%
   select(Protein_accession, Sequence_length, Start, End, Description, Analysis, e_value, Score) %>%
@@ -832,22 +841,79 @@ data_interpro_filtered <- data_interpro %>%
 data_interpro_filtered
 ```
 
-```{}
-data_interpro_filtered <- data_interpro %>%
-  group_by(Protein_accession) %>%
-  mutate(Description = case_when(
-             InterPro_description == "-" ~ Signature_description,
-             is.na(InterPro_description) ~ Signature_description,
-             TRUE ~ InterPro_description
-             )
-         ) %>%
-  filter(!is.na(Description), Description != "-",
-         Analysis == "Pfam") %>%
-  arrange(Protein_accession, Score) %>%
-  group_modify(~ keep_non_overlapping(.x)) %>%
-  select(Protein_accession, Sequence_length, Analysis)
-  ungroup()
-
-data_interpro_filtered
+```{r}
+for (protein in sort(unique(data_interpro_filtered$Protein_accession))) {
+  print(protein)
+  
+  data_interpro_subset <- data_interpro_filtered %>%
+    filter(Protein_accession == protein,
+           !is.na(Score)) %>%
+    mutate(
+      e_value = -log10(Score)
+           ) %>%
+    filter(!is.na(Description) & Description != "-") %>%
+    # Calculate the max e_value for each Analysis group and reorder Analysis factor
+    group_by(Analysis) %>%
+    mutate(max_e_value = max(e_value, na.rm = TRUE)) %>%
+    
+    ungroup() %>%
+    mutate(Analysis = factor(Analysis, levels = unique(Analysis[order(max_e_value)]))) %>%
+    select(-max_e_value)  # Remove max_e_value column
+  
+  plot <- data_interpro_subset %>%
+    group_by(Analysis,Description) %>%
+    mutate(
+      x_midpoint = Start + (End - Start)/2,
+      min_start = min(Start),
+      max_end = max(End),
+      group_midpoint = min_start + (max_end - min_start)/2,
+      size_calc = (End - Start)/(nchar(Description)*charweight),
+      group_size_calc = (max_end - min_start)/(nchar(Description)*charweight) 
+        
+    ) %>%
+    ggplot() +
+    geom_segment(
+      aes(
+        x = Start, xend = End,
+        y = Analysis, yend = Analysis,
+        color = Description,
+        alpha = e_value
+      ),
+      size = 8
+    ) +
+    geom_text(
+      aes(
+        x = ifelse(
+          size_calc >= 5,
+          x_midpoint,
+          group_midpoint
+        ),
+        y = Analysis,
+        color = Description, 
+        label = Description,
+        #size = ifelse(
+        #  size_calc >= 5,
+        #  pmin(size_calc, 0.1),
+        #  pmin(group_size_calc, 0.1)
+        #)
+        size = ifelse(
+          size_calc >= 5,
+          pmin(size_calc/100, 0.1),
+          pmin(pmax(group_size_calc/100,0.05), 0.1)
+        )
+      ),
+      color = "black",
+      show.legend = FALSE
+    ) +
+    scale_alpha_continuous() +
+    theme_bw() +
+    labs(
+      title = paste0("Domains in ", protein),
+      x = "Amino acid position",
+      y = "Analysis"
+    )
+  
+  print(plot)
+}
 ```
 

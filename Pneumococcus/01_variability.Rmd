@@ -846,14 +846,81 @@ saveRDS(proteins_without_structure, file = "data/variable_proteins_without_struc
 ```
 
 
+# load variability
+```{r}
+data_variability <- read.csv("output/data_variability.csv")
+
+data_variability
+```
+
+```{r}
+data_variability %>% filter(PDB == "1W9R")
+```
+
+
+#shannon evenness
+```{r}
+data_variability_shannon <- data_variability %>%
+  filter(str_detect(residue_tables, "-")) %>%
+  rowwise() %>%
+  mutate(
+    # Calculate entropy first
+    shannon_entropy = {
+      entries <- str_split(residue_tables, ";\\s*")[[1]]
+
+      counts <- sapply(entries, function(entry) {
+        parts <- str_split(entry, ":")[[1]]
+        residue <- parts[1]
+        count <- as.numeric(parts[2])
+        if (residue %in% c("*", "-")) return(NA)
+        count
+      }, USE.NAMES = FALSE)
+
+      counts <- counts[!is.na(counts)]
+
+      total <- sum(counts, na.rm = TRUE)
+
+      if (total == 0 || length(counts) == 0) {
+        NA_real_
+      } else {
+        probs <- counts / total
+        -sum(probs * log(probs))
+      }
+    },
+    # Then calculate evenness using entropy & number of residues
+    shannon_evenness = {
+      entries <- str_split(residue_tables, ";\\s*")[[1]]
+
+      counts <- sapply(entries, function(entry) {
+        parts <- str_split(entry, ":")[[1]]
+        residue <- parts[1]
+        if (residue %in% c("*", "-")) return(NA)
+        1L  # just count unique valid residues
+      }, USE.NAMES = FALSE)
+
+      k <- sum(!is.na(counts))  # number of residue types
+
+      if (is.na(shannon_entropy) || k <= 1) {
+        1
+      } else {
+        shannon_entropy / log(k)
+      }
+    }
+  ) %>%
+  ungroup()
+
+data_variability_shannon %>%
+  select(seqresno,residue_tables, var_counts, var_freq, indel_freq, shannon_entropy, shannon_evenness)
+```
+
 
 # plot
 ```{r}
-for (proteinindex in unique(data_variability$protein)) {
+for (proteinindex in unique(data_variability$protein)[1]) {
   data_subset <- data_variability %>% filter(protein == proteinindex)
   
   plot <- data_subset %>%
-    ggplot(aes(x=position, y=var_counts, fill=var_freq)) +
+    ggplot(aes(x=seqresno, y=var_counts)) +
     geom_col() +
     #scale_x_continuous(limits = c(1, 20), breaks = 1:20) +
     labs(title = paste0(proteinindex,"\nnumber of seqs: ",unique(data_subset$n_seq))) 
@@ -864,7 +931,7 @@ for (proteinindex in unique(data_variability$protein)) {
 ```
 
 ```{r}
-for (proteinindex in unique(data_variability$protein)) {
+for (proteinindex in unique(data_variability$protein)[1]) {
   data_subset <- data_variability %>% filter(protein == proteinindex)
   
   data_long <- data_subset %>%
@@ -880,7 +947,7 @@ for (proteinindex in unique(data_variability$protein)) {
     )
   
   plot <- data_long %>%
-    ggplot(aes(x = position, y = count_value, fill = count_type)) +
+    ggplot(aes(x = seqresno, y = count_value, fill = count_type)) +
     geom_bar(stat = "identity", position = "stack") +
     labs(title = paste0(proteinindex,"\nnumber of seqs: ",unique(data_subset$n_seq))) +
     scale_fill_manual(values = c("Variation" = "black", "Insertion" = "skyblue", "Deletion" = "maroon")) +
@@ -899,7 +966,7 @@ for (proteinindex in unique(data_variability$protein)) {
 
 
 ```{r}
-for (proteinindex in unique(data_variability$protein)) {
+for (proteinindex in unique(data_variability$protein)[1:5]) {
   data_subset <- data_variability %>% filter(protein == proteinindex)
   
   data_long <- data_subset %>%
@@ -916,15 +983,189 @@ for (proteinindex in unique(data_variability$protein)) {
     )
   
   plot <- data_long %>%
-    ggplot(aes(x = position, y = freq_value, fill = count_type)) +
+    ggplot(aes(x = seqresno, y = freq_value, fill = count_type)) +
     geom_bar(stat = "identity", position = "stack") +
     labs(title = paste0(proteinindex,"\nnumber of seqs: ",unique(data_subset$n_seq))) +
     scale_fill_manual(values = c("Variation" = "black", "Insertion" = "skyblue", "Deletion" = "maroon")) +
-    scale_y_continuous(limits = c(0, 1)) +
+    scale_y_continuous(limits = c(0, 0.5)) +
     theme_bw()
     
     print(plot)
 }
+```
+
+```{r}
+for (structureindex in unique(data_variability_shannon$structure)[1:5]) {
+  data_subset <- data_variability_shannon %>% filter(PDB == structureindex)
+  print(data_subset)
+  
+  plot <- data_subset %>%
+    ggplot(aes(x = seqresno, y = shannon_evenness)) +
+    geom_bar(stat = "identity", position = "stack") +
+    labs(title = paste0(unique(data_subset$protein),"\nnumber of seqs: ",unique(data_subset$n_seq))) +
+    #scale_fill_manual(values = c("Variation" = "black", "Insertion" = "skyblue", "Deletion" = "maroon")) +
+    #scale_y_continuous(limits = c(0, 0.5)) +
+    theme_bw()
+    
+    print(plot)
+}
+```
+
+
+```{r, fig.width=14}
+for (structureindex in unique(data_variability_shannon$structure)[1:5]) {
+  data_subset <- data_variability_shannon %>% filter(structure == structureindex)
+  
+  data_long <- data_subset %>%
+    gather(key = "count_type", value = "count_value", var_counts, indel_counts) %>%
+    mutate(
+      count_type = case_when(
+        count_type == "var_counts" ~ "Variation",  
+        indel_type == "insertion" ~ "Insertion", 
+        indel_type == "deletion" ~ "Deletion",    
+        TRUE ~ "Other"                           
+      ),
+      count_type = factor(count_type, levels = rev(c("Deletion", "Insertion", "Variation"))),
+      freq_value = count_value / n_seq
+    )
+  
+  plot_upper <- data_long %>%
+    ggplot(aes(x = seqresno, y = freq_value, fill = count_type)) +
+    geom_bar(stat = "identity", position = "stack") +
+    labs(title = paste0(unique(data_subset$protein),"\nnumber of seqs: ",unique(data_subset$n_seq))) +
+    scale_fill_manual(values = c("Variation" = "black", "Insertion" = "skyblue", "Deletion" = "maroon")) +
+    scale_y_continuous(expand = c(0,0)) +
+    scale_x_continuous(limits = c(0, max(data_long$seqresno)), expand = c(0,0)) +
+    theme_bw() #+
+    #theme(legend.position = "none")
+  
+  plot_lower <- data_subset %>%
+    ggplot(aes(x = seqresno, y = shannon_entropy)) +
+    geom_bar(stat = "identity", position = "stack") +
+    #labs(title = paste0(unique(data_subset$protein),"\nnumber of seqs: ",unique(data_subset$n_seq))) +
+    #scale_fill_manual(values = c("Variation" = "black", "Insertion" = "skyblue", "Deletion" = "maroon")) +
+    scale_y_continuous(expand = c(0,0)) +
+    scale_x_continuous(limits = c(0, max(data_subset$seqresno)), expand = c(0,0)) +
+    theme_bw()
+  
+  plot <- plot_grid(
+    plot_upper + 
+    theme(
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      plot.margin = margin(t = 5, r = 5, b = 3, l = 5)
+    )
+  ,
+  plot_lower + 
+    theme(
+      strip.text = element_blank(),
+      strip.background = element_blank(),
+      plot.margin = margin(t = 0, r = 5, b = 5, l = 5) 
+    )
+  ,
+    ncol = 1, 
+    align = "v",  # vertical alignment
+    axis = "lr"   # align left and right axes
+  )
+    
+  print(plot)
+}
+```
+
+```{r, fig.width=14}
+for (structureindex in unique(data_variability_shannon$structure)[5]) {
+  data_subset <- data_variability_shannon %>% filter(structure == structureindex)
+  
+  
+  plot_upper <- data_subset %>%
+    ggplot(aes(x = seqresno, y = var_freq)) +
+    geom_bar(stat = "identity", position = "stack") +
+    labs(title = paste0(unique(data_subset$protein),"\nnumber of seqs: ",unique(data_subset$n_seq))) +
+    scale_y_continuous(limits = c(0,0.5),expand = c(0,0)) +
+    scale_x_continuous(limits = c(0, max(data_long$seqresno)), expand = c(0,0)) +
+    labs(y = "Residue variability") +
+    theme_bw() +
+    theme(
+    axis.title.x = element_text(size = 15),
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+  ) 
+  
+  plot_lower <- data_subset %>%
+    ggplot(aes(x = seqresno, y = shannon_entropy)) +
+    geom_bar(stat = "identity", position = "stack") +
+    #labs(title = paste0(unique(data_subset$protein),"\nnumber of seqs: ",unique(data_subset$n_seq))) +
+    #scale_fill_manual(values = c("Variation" = "black", "Insertion" = "skyblue", "Deletion" = "maroon")) +
+    scale_y_continuous(limits = c(0,1),expand = c(0,0)) +
+    scale_x_continuous(limits = c(0, max(data_subset$seqresno)), expand = c(0,0)) +
+    labs(x = "",
+         y = "Residue Shannon entropy") +
+    theme_bw() +
+    theme(
+    axis.title.x = element_text(size = 15),
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+  )
+  
+  plot <- plot_grid(
+    plot_upper + 
+    theme(
+      axis.text.x = element_blank(),
+      axis.title.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      plot.margin = margin(t = 5, r = 5, b = 3, l = 5)
+    )
+  ,
+  plot_lower + 
+    theme(
+      strip.text = element_blank(),
+      strip.background = element_blank(),
+      plot.margin = margin(t = 0, r = 5, b = 5, l = 5) 
+    )
+  ,
+    ncol = 1, 
+    align = "v",  # vertical alignment
+    axis = "lr"   # align left and right axes
+  )
+    
+  print(plot)
+}
+```
+
+```{r}
+data_subset %>% filter(resno > 267, resno <= 277) %>%
+  select(seqresno, var_freq, shannon_entropy, residue_tables)
+```
+
+
+## shannon vs var
+```{r}
+data_variability_shannon %>%
+  filter(var_freq < 0.05, shannon_entropy > 0.3)
+```
+
+
+```{r, fig.width=14}
+data_variability_shannon %>%
+  filter(consensus_res != "-") %>%
+  ggplot(aes(x=var_freq,y=shannon_entropy)) +
+  geom_point() +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_bw() +
+  labs(x = "Residue variability",
+       y = "Residue Shannon entropy",
+       title = "Correlation between Shannon entropy and variability") +
+  theme(
+    axis.title.x = element_text(size = 15),
+    axis.title.y = element_text(size = 15),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10),
+  )
+
 ```
 
 
@@ -961,15 +1202,9 @@ for (proteinindex in unique(data_variability$protein)) {
 }
 ```
 
+
+
 # summary statistics
-
-```{r}
-data_variability <- read.csv("output/data_variability.csv")
-
-data_variability
-```
-
-
 ```{r}
 data_variability_with_seroprof <- data_variability %>%
   mutate(
@@ -1151,3 +1386,5 @@ plot_grid(
   rel_heights = c(1, 0.5)  # adjust height ratio as needed
 )
 ```
+
+

@@ -500,8 +500,10 @@ for (pdb_entry in pdb_files_list[2]) {
 #### with scores
 ```{r, fig.width=14}
 set.seed(335)
+prediction_tools <- c("BepiPred-2.0 probability", "BepiPred-3.0 score", "DiscoTope-3.0_calibrated_score","Epigraph_score")
 
-for (pdb_entry in pdb_files_list[3]) {
+
+for (pdb_entry in pdb_files_list[4]) {
   print(pdb_entry)
   
   pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
@@ -515,12 +517,12 @@ for (pdb_entry in pdb_files_list[3]) {
   
   data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == pdb_entry)
   
-  protein_name <- unique(data_subset$proteinname)
+  protein_name <- unique(data_subset$structure)
   
   for (chain_index in chains) {
     cat("  Processing chain:", chain_index, "\n")
     
-    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+    ca.inds <- atom.select(pdb_object, chain = chain_index, elety = "CA", type = "ATOM")
         #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
     ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
       filter(
@@ -565,14 +567,9 @@ for (pdb_entry in pdb_files_list[3]) {
     data_subset_wide <- data_subset_chain %>%
       select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
              `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
-      distinct() %>%
+      drop_na(resno) %>%
       column_to_rownames("resno") %>%
       as.data.frame()
-    
-    prediction_scores <- data_subset_wide$`BepiPred-3.0 score`
-    names(prediction_scores) <- rownames(data_subset_wide)
-    
-    prediction_tools <- c("BepiPred-2.0 probability", "BepiPred-3.0 score", "DiscoTope-3.0_calibrated_score","Epigraph_score")
     
     layout <- layout_with_fr(g)
     
@@ -601,6 +598,143 @@ for (pdb_entry in pdb_files_list[3]) {
   }
 }
 
+```
+
+## directed
+```{r, fig.width=14}
+set.seed(335)
+prediction_tools <- c("BepiPred-2.0 probability", "BepiPred-3.0 score", "DiscoTope-3.0_calibrated_score","Epigraph_score")
+
+
+for (pdb_entry in pdb_files_list[4]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom %>% 
+                     filter(
+                       elety == "CA", 
+                       type == "ATOM"
+                     ) %>% 
+                     pull(chain))
+  
+  data_subset <- data_predictions_with_variability_normalized %>% filter(PDB == pdb_entry)
+  
+  protein_name <- unique(data_subset$structure)
+  
+  for (chain_index in chains) {
+    cat("  Processing chain:", chain_index, "\n")
+    
+    ca.inds <- atom.select(pdb_object, chain = chain_index, elety = "CA", type = "ATOM")
+        #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
+    ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
+      filter(
+        alt %in% c(NA, "A")
+      )
+    
+    coords <- pdb_object$xyz[atom2xyz(ca_atoms$eleno)]
+    
+    dist.mat <- dist.xyz(coords)
+    
+    resnos <- pdb_object$atom %>%
+      filter(chain == chain_index, elety == "CA", type == "ATOM") %>%
+      pull(resno) %>%
+      as.character()
+
+    rownames(dist.mat) <- resnos
+    colnames(dist.mat) <- resnos
+    
+    # Create a contact map (binary)
+    contact.map <- dist.mat < 10  # Threshold distance to 10 Å
+    diag(contact.map) <- FALSE
+    
+    # Create a graph from the contact map (edges are formed where contact exists)
+    edge_list <- which(contact.map, arr.ind = TRUE)
+    edge_list_named <- cbind(
+      from = rownames(contact.map)[edge_list[,1]],
+      to = colnames(contact.map)[edge_list[,2]]
+    )
+    # Create an igraph object from the edge list
+    g <- graph_from_edgelist(as.matrix(edge_list_named), directed = FALSE)
+    
+    # Optionally add weights based on distance
+    E(g)$weight <- dist.mat[edge_list]  # Distance between connected atoms
+    
+    color_df <- get_residueindex_colors_v2(as.numeric(resnos))
+    vertex_colors <- setNames(color_df$color, as.character(color_df$resno))
+
+    V(g)$color <- vertex_colors[as.character(V(g)$name)]
+    
+    data_subset_chain <- data_subset %>% filter(chain == chain_index)
+    
+    data_subset_wide <- data_subset_chain %>%
+      select(resno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
+             `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+      drop_na(resno) %>%
+      column_to_rownames("resno") %>%
+      as.data.frame()
+    
+layout <- layout_with_fr(graph_from_edgelist(as.matrix(edge_list_named), directed = FALSE))  # layout only once
+
+# Loop over each prediction tool
+for (tool in prediction_tools) {
+  prediction_scores <- data_subset_wide[[tool]]
+  names(prediction_scores) <- rownames(data_subset_wide)
+
+  # Build directed edge list: low -> high
+  edge_scores <- apply(edge_list_named, 1, function(edge) {
+    from_res <- edge[1]
+    to_res <- edge[2]
+    from_score <- prediction_scores[from_res]
+    to_score <- prediction_scores[to_res]
+    
+    if (is.na(from_score) || is.na(to_score)) {
+      return(NULL)
+    }
+    
+    if (from_score < to_score) {
+      return(c(from = from_res, to = to_res))
+    } else if (from_score > to_score) {
+      return(c(from = to_res, to = from_res))
+    } else {
+      return(NULL)  # Equal scores: skip to avoid undirected edges
+    }
+  })
+
+  # Combine valid edges into data.frame
+  directed_edges <- do.call(rbind, edge_scores)
+  if (is.null(directed_edges) || nrow(directed_edges) < 1) {
+    warning("No directed edges formed for tool: ", tool)
+    next
+  }
+
+  g <- graph_from_data_frame(directed_edges, directed = TRUE)
+
+  # Add vertex attributes
+  V(g)$size <- prediction_scores[as.character(V(g)$name)] * 20
+  V(g)$size[is.na(V(g)$size)] <- 2
+  V(g)$color <- vertex_colors[as.character(V(g)$name)]
+
+  # Optional: assign edge weights (for plotting edge.width)
+  # Use original dist.mat for edge weights
+  E(g)$weight <- apply(as.data.frame(get.edgelist(g)), 1, function(e) {
+    i <- which(rownames(dist.mat) == e[1])
+    j <- which(colnames(dist.mat) == e[2])
+    return(dist.mat[i, j])
+  })
+
+  plot(g,
+       main = paste0("Directed Epitope Graph: ", pdb_entry, " (Chain ", chain_index, ")\n", tool),
+       vertex.size = V(g)$size,
+       vertex.label = NA,
+       edge.width = E(g)$weight / 4,
+       edge.color = "gray",
+       layout = layout,
+       vertex.color = V(g)$color
+  )
+  }
+  }
+}
 ```
 
 
@@ -733,7 +867,7 @@ for (pdb_entry in pdb_files_list[3]) {
   for (chain_index in chains) {
     cat("  Processing chain:", chain_index, "\n")
     
-    ca.inds <- atom.select(pdb_object, chain = chain_id, elety = "CA", type = "ATOM")
+    ca.inds <- atom.select(pdb_object, chain = chain_index, elety = "CA", type = "ATOM")
         #we have to remove all alternative conformations, only keeping 1 $alt per residue, unfortunately atom.select does not have an alt argument
     ca_atoms <- pdb_object$atom[ca.inds$atom,] %>%
       filter(
