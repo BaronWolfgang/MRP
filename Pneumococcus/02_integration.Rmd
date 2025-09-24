@@ -1,0 +1,177 @@
+---
+title: "Streptococcus pneumoniae epitope visualization"
+author: "Jan Paul van Meenen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+#Packages
+```{r}
+source("requirements/packages.R")
+```
+
+#Functions
+```{r}
+function_files <- list.files(path = "functions", pattern = "\\.R$",full.names = TRUE)
+
+for (function_file in function_files) {
+  source(function_file)
+}
+```
+
+# Plot all together
+## Load in from 01
+```{r}
+data_BepiPred_2_with_resno <- read.csv("output/BepiPred2.0/data_BepiPred2.csv", check.names = FALSE)
+data_BepiPred_3_with_resno <- read.csv("output/BepiPred3.0/data_BepiPred3.csv", check.names = FALSE)
+data_Epigraph <- read.csv("output/EpiGraph/data_Epigraph.csv", check.names = FALSE)
+data_DiscoTope <- read.csv("output/DiscoTope/data_DiscoTope.csv", check.names = FALSE)
+map_namesclasspdb_AF3 <- read.csv("data/map_nameclass_pdbAF3.csv", check.names = FALSE)
+```
+
+
+## create joined predictions df
+```{r}
+data_predictions_sequencebased <- full_join(
+  data_BepiPred_2_with_resno %>%
+    mutate(
+      `BepiPred-2.0 probability` = EpitopeProbability,
+      `RSA_NetsurfP` = RelativeSurfaceAccessilibity
+    ) %>%
+    select(
+      proteinclass, protein, TIGR4_name, PDB, chain, resno, resid, x,y,z,b, seqresno, seqres_resid,
+      `BepiPred-2.0 probability`,RSA_NetsurfP
+    ) 
+  ,
+  
+  data_BepiPred_3_with_resno %>%
+    select(
+      proteinclass, protein, TIGR4_name, PDB, chain, resno, resid, x,y,z,b, seqresno, seqres_resid, 
+      `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`
+    ) 
+  ,
+  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid","seqres_resid","seqresno","x","y","z","b")
+)
+
+data_predictions_sequencebased
+```
+
+```{r}
+data_predictions_structurebased <- full_join(
+  data_Epigraph %>%
+    mutate(
+      Epigraph_score = Score
+      ) %>%
+    select(proteinclass,protein,TIGR4_name,PDB, chain, resno, resid, Epigraph_score, RSA)
+  ,
+  data_DiscoTope %>%
+    mutate(
+           `RSA Shrake-Rupley` = rsa,
+           `DiscoTope-3.0_calibrated_score` = calibrated_score
+    ) %>%
+    select(
+      proteinclass,protein,TIGR4_name,PDB, chain, resno, resid, `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, `RSA Shrake-Rupley`
+      )
+  , 
+  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid")
+)
+data_predictions_structurebased
+```
+
+
+```{r}
+data_predictions <- full_join(
+  data_predictions_sequencebased,
+  data_predictions_structurebased %>%
+    group_by(proteinclass,protein,TIGR4_name,PDB) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%
+    filter(chain_length == max(chain_length)) %>%
+    filter(chain == min(chain)),
+  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid")
+  ) %>%
+  left_join(map_namesclasspdb_AF3 %>% select(protein, PDB, AF3)) %>%
+  mutate(structure = case_when(
+    !is.na(PDB) ~ PDB,
+    !is.na(AF3) ~ str_remove(AF3, "\\.pdb$"),
+    TRUE ~ NA
+  ))
+
+data_predictions %>%
+  filter(if_any(everything(), is.na))
+
+#data_predictions <- data_predictions %>%
+#  na.omit() 
+
+data_predictions
+```
+
+##save
+```{r}
+write.csv(data_predictions,
+          "output/data_predictions.csv", 
+          row.names=FALSE) 
+```
+
+
+# Variability
+matching variability consensus sequence to epitope predictions sequences
+## variability_data_with_resno
+```{r}
+data_variability <- read.csv("output/data_variability_filtered.csv") #%>%
+  #distinct(structure,chain,x,y,z, .keep_all = TRUE)
+
+data_variability
+```
+
+```{r}
+data_variability %>% filter(protein == "GlpO")
+```
+
+
+
+
+#!LOW n_seq MATCH FILTER
+```{r}
+data_variability %>% select(proteinclass, protein, structure, n_seq) %>% arrange(n_seq) %>% unique()
+```
+
+```{r}
+low_n_seq <- c("PspC")
+
+data_variability <- data_variability %>% filter(!protein %in% c(low_n_seq))
+```
+
+### check the missing ones
+Currently working with PDB entries only, not all proteins have PDB's associated with them, so some are missing
+```{}
+sort(unique(data_predictions$protein))
+sort(unique(data_variability$protein))
+
+setdiff(
+  tolower(unique(data_predictions$protein)),
+  tolower(unique(data_variability$protein))
+)
+
+setdiff(
+  tolower(unique(data_variability$protein)),
+  tolower(unique(data_predictions$protein))
+)
+```
+
+```{r}
+data_predictions_with_variability <- full_join(
+  data_predictions,
+  data_variability %>% select(-chain),
+  by = c("proteinclass","protein","structure","resno","resid", "seqresno", "seqres_resid", "x", "y", "z", "b", "PDB", "AF3"))
+
+data_predictions_with_variability
+```
+
+
+###save
+```{r}
+write.csv(data_predictions_with_variability,
+          "output/data_predictions_with_variability.csv", 
+          row.names=FALSE) 
+```

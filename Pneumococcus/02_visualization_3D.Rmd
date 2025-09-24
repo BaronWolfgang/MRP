@@ -18,6 +18,7 @@ for (function_file in function_files) {
   source(function_file)
 }
 ```
+
 #Shiny
 ##load predictions
 ```{r}
@@ -38,18 +39,13 @@ pdb_annotation_csv <- "output/data_predictions_with_variability.csv"
 pdb_annotation_df <- read_csv(pdb_annotation_csv) %>%
   mutate(structure = tools::file_path_sans_ext(structure))
 
+
+```
+
+
+```{r}
 num_bins <- 21
-```
 
-
-```{r}
-data_predictions_with_variability %>%
-  filter(PDB == "1W6T")
-
-```
-
-
-```{r}
 ui <- fluidPage(
   uiOutput("dynamic_title"),
   sidebarLayout(
@@ -57,19 +53,30 @@ ui <- fluidPage(
     sidebarPanel(
       selectInput("pdb_file", "Select PDB", 
                   choices = setNames(pdb_paths, tools::file_path_sans_ext(basename(pdb_paths)))
-                  ),
-      
-      selectInput(
-        "type", "Type", c("ball+stick", "cartoon", "ribbon","surface"),
-        selected = "surface"
-        ),
-      
-      selectInput(
-        "viewmode","View mode", 
-        colnames(pdb_annotation_df[sapply(pdb_annotation_df, is.numeric)]), 
       ),
       
-      selectInput("viewmethod", "View method", c("score", "topn", "threshold")),
+      selectInput(
+        "struc_representation", "Structure representation", c("ball+stick", "cartoon", "ribbon","surface"),
+        selected = "cartoon"
+      ),
+      
+      selectInput(
+        "struc_color_scheme", "Structure color scheme", c("uniform", "residueindex", "bfactor"),
+        selected = "residueindex"
+      ),
+      
+      
+      selectInput(
+        "viewmode","Selection type", 
+        colnames(pdb_annotation_df[sapply(pdb_annotation_df, is.numeric)]) 
+      ),
+      
+      selectInput(
+        "type", "Selection representation", c("ball+stick", "cartoon", "ribbon","surface","spacefill"),
+        selected = "surface"
+      ),
+      
+      selectInput("viewmethod", "Selection method", c("score", "topn", "threshold")),
       
       conditionalPanel(
         condition = "input.viewmethod == 'topn'",
@@ -83,11 +90,12 @@ ui <- fluidPage(
       
       checkboxInput("normalize", "Normalize values", value = FALSE),
       
-      actionButton("add", "Add"),
-      actionButton("remove", "Remove")
+      actionButton("add", "Add selection"),
+      actionButton("remove", "Remove selection"),
       
-      
+      actionButton("download_png", "Download Structure as PNG")
     ),
+    
     mainPanel(
       verbatimTextOutput('selection'),
       plotOutput("score_plot", height = "200px"),
@@ -155,8 +163,9 @@ server <- function(input, output) {
     sliderInput("threshold_value", "Threshold",
                 min = min(values),
                 max = max(values),
-                value = median(values),
-                step = 0.01)
+                value = mean(values),
+                step = 0.01
+                )
   })
   
   output$score_plot <- renderPlot({
@@ -186,6 +195,7 @@ server <- function(input, output) {
     p <- ggplot(data, aes(x = seqresno, y = view)) +
       geom_col(aes(fill = color), width = 1) +
       scale_fill_identity() +  # use the literal colors in 'color' column
+      scale_x_continuous(expand = c(0,0)) +
       labs(
         x = "Residue Number",
         y = selected_column,
@@ -234,10 +244,12 @@ server <- function(input, output) {
     data <- data_reactive()
     
     NGLVieweR(input$pdb_file) %>%
-      addRepresentation("cartoon",
-                        param = list(name = "cartoon", 
-                                     colorScheme = "residueindex",
-                                     sele = paste0("/0 AND :",                                                   unique(na.omit(data$chain)))
+      addRepresentation(type = input$struc_representation,
+                        param = list(name = "base", 
+                                     colorScheme = input$struc_color_scheme,
+                                     sele = paste0("/0 AND :",
+                                                   unique(na.omit(data$chain))
+                                                   )
                         )
       ) %>%
       stageParameters(backgroundColor = "white") %>%
@@ -308,7 +320,6 @@ server <- function(input, output) {
           sele = paste0(sele, collapse = " "),
           .groups = "drop"
         )
-      
       
       for (i in seq_len(nrow(color_groups))) {
         proxy <- proxy %>%
@@ -388,10 +399,9 @@ server <- function(input, output) {
       selected_column <- input$viewmode
       
       data <- data_reactive()
+      data$view <- data[[selected_column]]
       if (isTRUE(input$normalize)) {
         data$view <- scales::rescale(data[[selected_column]], to = c(0, 1))
-      } else {
-        data$view <- data[[selected_column]]
       }
       
       proxy <- NGLVieweR_proxy("structure")
@@ -432,11 +442,33 @@ server <- function(input, output) {
       }
     })
     
+    observeEvent({
+      input$download_png
+    },{
+      proxy <- NGLVieweR_proxy("structure") 
+      
+      filename <- paste0(isolate(structure_id()))
+      
+      proxy %>%
+        snapShot(fileName = filename,
+          param = list(
+            antialias = TRUE,
+            trim = TRUE,
+            transparent = TRUE,
+            scale = 1
+          )
+        )
+    })
+    
   }
-  shinyApp(ui, server)
+
+shinyApp(ui, server, 
+         options = list(launch.browser = TRUE)
+         )
 ```
 
 ```{r}
+
 for(
   pdb_entry in unique(na.omit(data_predictions_with_variability_normalized$PDB))
     ) {

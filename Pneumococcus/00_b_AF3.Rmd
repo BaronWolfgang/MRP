@@ -90,7 +90,6 @@ for (AlphaFold3_folder in AlphaFold3_recombinant_folders) {
 }
 ```
 
-
 ## combine all into one df
 ```{r}
 data_AF3_recombinant <- NULL
@@ -436,3 +435,9 @@ map_namesclasspdb_AF3 <- data_namesclasspdb %>%
 
 map_namesclasspdb_AF3
 ```
+
+
+```{r}
+write.csv(map_namesclasspdb_AF3, "data/map_nameclass_pdbAF3.csv")
+```
+

@@ -19,87 +19,11 @@ for (function_file in function_files) {
 }
 ```
 
-# Plot all together
-## Load in from 01
+# Predictions only
+## load integrated data 
 ```{r}
-data_BepiPred_2_with_resno <- read.csv("output/BepiPred2.0/data_BepiPred2.csv", check.names = FALSE)
-data_BepiPred_3_with_resno <- read.csv("output/BepiPred3.0/data_BepiPred3.csv", check.names = FALSE)
-data_Epigraph <- read.csv("output/EpiGraph/data_Epigraph.csv", check.names = FALSE)
-data_DiscoTope <- read.csv("output/DiscoTope/data_DiscoTope.csv", check.names = FALSE)
+data_predictions <- read.csv("output/data_predictions.csv") 
 ```
-
-
-## create joined predictions df
-```{r}
-data_predictions_sequencebased <- full_join(
-  data_BepiPred_2_with_resno %>%
-    mutate(
-      `BepiPred-2.0 probability` = EpitopeProbability,
-      `RSA_NetsurfP` = RelativeSurfaceAccessilibity
-    ) %>%
-    select(
-      proteinclass, protein, TIGR4_name, PDB, chain, resno, resid, x,y,z,b, seqresno, seqres_resid,
-      `BepiPred-2.0 probability`,RSA_NetsurfP
-    ) 
-  ,
-  
-  data_BepiPred_3_with_resno %>%
-    select(
-      proteinclass, protein, TIGR4_name, PDB, chain, resno, resid, x,y,z,b, seqresno, seqres_resid, 
-      `BepiPred-3.0 score`,`BepiPred-3.0 linear epitope score`
-    ) 
-  ,
-  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid","seqres_resid","seqresno","x","y","z","b")
-)
-
-data_predictions_sequencebased
-```
-
-
-```{r}
-data_predictions_structurebased <- full_join(
-  data_Epigraph %>%
-    mutate(
-      Epigraph_score = Score
-      ) %>%
-    select(proteinclass,protein,TIGR4_name,PDB, chain, resno, resid, Epigraph_score, RSA)
-  ,
-  data_DiscoTope %>%
-    mutate(
-           `RSA Shrake-Rupley` = rsa,
-           `DiscoTope-3.0_calibrated_score` = calibrated_score
-    ) %>%
-    select(
-      proteinclass,protein,TIGR4_name,PDB, chain, resno, resid, `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, `RSA Shrake-Rupley`
-      )
-  , 
-  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid")
-)
-data_predictions_structurebased
-```
-
-
-```{r}
-data_predictions <- full_join(
-  data_predictions_sequencebased,
-  data_predictions_structurebased %>%
-    group_by(proteinclass,protein,TIGR4_name,PDB) %>%
-    add_count(chain, name = "chain_length") %>%
-    arrange(desc(chain_length), chain) %>%
-    filter(chain_length == max(chain_length)) %>%
-    filter(chain == min(chain)),
-  by = c("proteinclass","protein","TIGR4_name","PDB","chain","resno","resid")
-  )
-
-data_predictions %>%
-  filter(if_any(everything(), is.na))
-
-#data_predictions <- data_predictions %>%
-#  na.omit() 
-
-data_predictions
-```
-
 
 ## normalize
 ```{r}
@@ -328,64 +252,152 @@ for (pdb_entry in unique(data_predictions_normalized$PDB)) {
 }
 ```
 
+## Intertool correlations 
+```{r}
+colnames(data_predictions)
+```
+
+```{r}
+library(ggbeeswarm)
+
+data_predictions %>%
+  group_by(PDB) %>%
+  summarise(
+    spearman_bp_epi  = cor(`BepiPred-3.0 score`, Epigraph_score, method = "spearman", use = "pairwise.complete.obs"),
+    spearman_bp_disc = cor(`BepiPred-3.0 score`, `DiscoTope-3.0_calibrated_score`, method = "spearman", use = "pairwise.complete.obs"),
+    spearman_epi_disc = cor(Epigraph_score, `DiscoTope-3.0_calibrated_score`, method = "spearman", use = "pairwise.complete.obs"),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = starts_with("spearman"),
+    names_to = "pair",
+    values_to = "rho"
+  ) %>%
+  ggplot(aes(x = pair, y = rho, fill = pair)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_quasirandom(width = 0.2, size = 1.5, alpha = 0.6) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Tool comparison",
+    y = "Spearman correlation (per protein)",
+    title = "Distribution of correlation between epitope prediction tools"
+  ) +
+  theme(legend.position = "none") +
+  scale_x_discrete(labels = c(
+    spearman_bp_epi   = "BepiPred 3.0 vs Epigraph",
+    spearman_bp_disc  = "BepiPred 3.0 vs DiscoTope",
+    spearman_epi_disc = "Epigraph vs DiscoTope"
+  ))
+```
+
+### correlation between different structures of the same protein
+```{r}
+data_predictions %>%
+  group_by(PDB) %>%
+  summarise(
+    spearman_bp_epi  = cor(`BepiPred-3.0 score`, Epigraph_score, method = "spearman", use = "pairwise.complete.obs"),
+    spearman_bp_disc = cor(`BepiPred-3.0 score`, `DiscoTope-3.0_calibrated_score`, method = "spearman", use = "pairwise.complete.obs"),
+    spearman_epi_disc = cor(Epigraph_score, `DiscoTope-3.0_calibrated_score`, method = "spearman", use = "pairwise.complete.obs"),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = starts_with("spearman"),
+    names_to = "pair",
+    values_to = "rho"
+  ) %>%
+  ggplot(aes(x = pair, y = rho, fill = pair)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_quasirandom(width = 0.2, size = 1.5, alpha = 0.6) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Tool comparison",
+    y = "Spearman correlation (per protein)",
+    title = "Distribution of correlation between epitope prediction tools"
+  ) +
+  theme(legend.position = "none") +
+  scale_x_discrete(labels = c(
+    spearman_bp_epi   = "BepiPred 3.0 vs Epigraph",
+    spearman_bp_disc  = "BepiPred 3.0 vs DiscoTope",
+    spearman_epi_disc = "Epigraph vs DiscoTope"
+  ))
+```
 
 
-# Variability
+```{r}
+master_corr_list <- list()
+
+for (protein_entry in unique(data_predictions_with_variability$protein)) {
+  data_predictions_subset <- data_predictions %>% 
+    filter(protein == protein_entry)
+  
+  # Get unique PDBs for this protein
+  pdbs <- unique(data_predictions_subset$PDB)
+  
+  # Initialize a list to store correlations for this protein
+  corr_list <- list()
+  
+  # Only compute if there are at least 2 PDBs
+  if(length(pdbs) <= 2) {
+    message(protein_entry, " has fewer than 2 PDBs, skipped")
+    next
+  }
+  
+  print(paste(protein_entry, ":", pdbs))
+  
+  # Get all pairs of PDBs
+  pdb_pairs <- combn(pdbs, 2, simplify = FALSE)
+  
+  # Loop over each tool
+  tools <- c("BepiPred-3.0 score", "Epigraph_score", "DiscoTope-3.0_calibrated_score")
+  
+  for (tool in tools) {
+    
+    # Compute Spearman correlations for each PDB pair
+    corrs <- sapply(pdb_pairs, function(pair) {
+      pdb1 <- data_predictions_subset %>% filter(PDB == pair[1])
+      pdb2 <- data_predictions_subset %>% filter(PDB == pair[2])
+      
+      # Match residues using seqresno
+      merged <- merge(pdb1, pdb2, by = "seqresno", suffixes = c(".1", ".2"))
+      
+      # If fewer than 2 matching residues, return NA
+      if(nrow(merged) < 2) return(NA)
+      
+      # Spearman correlation, ignoring NAs
+      cor(merged[[paste0(tool, ".1")]], merged[[paste0(tool, ".2")]], 
+          method = "spearman", use = "pairwise.complete.obs")
+    })
+    
+    # Store correlations in the list
+    corr_list[[tool]] <- corrs
+  }
+  
+  master_corr_list[[protein_entry]] <- corr_list
+}
+  
+master_corr_list
+```
+
+
+# Predictions with Variability
 matching variability consensus sequence to epitope predictions sequences
-## variability_data_with_resno
+## load data with variability
 ```{r}
-data_variability <- read.csv("output/data_variability.csv") #%>%
+data_predictions_with_variability <- read.csv("output/data_predictions_with_variability.csv", check.names = FALSE) #%>%
   #distinct(structure,chain,x,y,z, .keep_all = TRUE)
-
-data_variability
-```
-
-### check the missing ones
-Currently working with PDB entries only, not all proteins have PDB's associated with them, so some are missing
-```{r}
-sort(unique(data_predictions$protein))
-sort(unique(data_variability$protein))
-
-setdiff(
-  tolower(unique(data_predictions$protein)),
-  tolower(unique(data_variability$protein))
-)
-
-setdiff(
-  tolower(unique(data_variability$protein)),
-  tolower(unique(data_predictions$protein))
-)
-```
-
-```{r}
-data_predictions_with_variability <- full_join(
-  data_predictions,
-  data_variability %>% select(-chain),
-  by = c("proteinclass","protein","PDB","resno","resid", "seqresno", "seqres_resid", "x", "y", "z", "b"))
 
 data_predictions_with_variability
 ```
 
-
-###save
-```{r}
-write.csv(data_predictions_with_variability,
-          "output/data_predictions_with_variability.csv", 
-          row.names=FALSE) 
-```
-
-```{r}
-data_predictions %>% filter(PDB == "3CX3") 
-data_variability %>% filter(PDB == "3CX3")
-```
-
 ### normalized
 ```{r}
+score_cols <- c("BepiPred-3.0 score", "DiscoTope-3.0_calibrated_score", "Epigraph_score")
+
 data_predictions_with_variability_normalized <- data_predictions_with_variability %>%
-  group_by(PDB) %>%
+  group_by(structure) %>%
   mutate(
     across(
-      c(`BepiPred-3.0 score` , `DiscoTope-3.0_score`, `DiscoTope-3.0_calibrated_score`, Epigraph_score), 
+      score_cols, 
       rescale
     )
   ) %>%
@@ -588,8 +600,7 @@ for (structure_entry in na.omit(unique(data_predictions_with_variability_normali
   data_subset_chain <- data_subset %>% filter(chain == longest_chain)
   
   data_subset_wide <- data_subset_chain %>%
-    select(seqresno,`BepiPred-2.0 probability`,`BepiPred-3.0 score`, 
-           `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
+    select(seqresno,score_cols, var_freq) %>%
     #distinct() %>%
     column_to_rownames("seqresno") %>%
     as.data.frame()
@@ -890,7 +901,7 @@ show_col(domain_description_colors)
 
 ```
 
-```{r, fig.width=14}
+```{, fig.width=14}
 for (structure_entry in na.omit(unique(data_predictions_with_variability_normalized$structure))) {
   print(structure_entry)
   
@@ -916,10 +927,8 @@ for (structure_entry in na.omit(unique(data_predictions_with_variability_normali
   
   data_subset_wide <- data_subset_chain %>%
     select(resno,seqresno,
-           #`BepiPred-2.0 probability`,
-           `BepiPred-3.0 score`, 
-           `DiscoTope-3.0_calibrated_score`, Epigraph_score, var_freq) %>%
-    mutate(across(c(`DiscoTope-3.0_calibrated_score`, Epigraph_score), ~ if (all(is.na(.))) NULL else .)) %>%
+           score_cols, var_freq) %>%
+    mutate(across(score_cols, ~ if (all(is.na(.))) NULL else .)) %>%
     column_to_rownames("seqresno") %>%
     as.data.frame()
   
@@ -961,7 +970,7 @@ for (structure_entry in na.omit(unique(data_predictions_with_variability_normali
   rsa_vector <- data_subset_chain %>%
     filter(seqresno %in% residues) %>%
     arrange(match(seqresno, residues)) %>%
-    pull(`RSA Shrake-Rupley`)
+    pull(`RSA.Shrake.Rupley`)
   
   names(rsa_vector) <- as.character(residues)
   
@@ -1050,20 +1059,201 @@ for (structure_entry in na.omit(unique(data_predictions_with_variability_normali
 }
 ```
 
-```{r}
-data_DiscoTope %>% 
-  filter(PDB == "5SWA")
-```
+```{r, fig.width=14}
+for (structure_entry in na.omit(sort(unique(data_predictions_with_variability_normalized$structure)))[4]) {
+  print(structure_entry)
+  
+  data_subset <- data_predictions_with_variability_normalized %>%
+    filter(structure == structure_entry)
+  
+  protein_name  <- unique(data_subset$protein)
+  protein_class <- unique(data_subset$proteinclass)
+  TIGR4_name    <- unique(data_subset$TIGR4_name)
+  
+  # Longest chain selection
+  longest_chain <- data_subset %>% 
+    filter(resid %in% toupper(AMINO_ACID_CODE)) %>%
+    add_count(chain, name = "chain_length") %>%
+    arrange(desc(chain_length), chain) %>%
+    filter(chain_length == max(chain_length)) %>%
+    filter(chain == min(chain)) %>%
+    pull(chain) %>%
+    unique()
+  
+  if (length(longest_chain) == 0) {
+    message("No valid chain, fallback to NA")
+    longest_chain <- NA
+  }
+  
+  print(longest_chain)
+  data_subset_chain <- data_subset %>% filter(chain == longest_chain)
+  if (all(is.na(data_subset_chain$aligned_posno))) {
+    data_subset_chain <- data_subset_chain %>%
+      mutate(plot_posno = seqresno)
+  } else {
+    data_subset_chain <- data_subset_chain %>%
+      mutate(plot_posno = aligned_posno) %>%
+      drop_na(plot_posno)
+  }
+  
+  # Prepare wide data
+  data_subset_wide <- data_subset_chain %>%
+    select(resno, seqresno, aligned_posno, plot_posno,
+           score_cols,
+           snp_freq, var_freq) %>%
+    mutate(across(score_cols,
+                  ~ if (all(is.na(.))) NULL else .)
+           ) %>%
+    column_to_rownames("plot_posno") %>%
+    as.data.frame()
+  
+  bar_data <- data_subset_wide$var_freq
+  names(bar_data) <- rownames(data_subset_wide)
+  
+  data_subset_wide <- data_subset_wide %>%
+      select(any_of(score_cols))
+  
+  heatmap_matrix <- t(data_subset_wide)
+  
+  # Top annotation (variability barplot)
+  top_annot <- HeatmapAnnotation(
+    `Variability` = anno_barplot(
+      bar_data, 
+      gp = gpar(fill = "gray30"), 
+      border = FALSE, 
+      bar_width = 1, 
+      ylim = c(0, 1),
+      axis_param = list(
+        at = seq(0, 1, by = 0.2),
+        labels = seq(0, 1, by = 0.2)
+      )
+    ),
+    show_annotation_name = TRUE,
+    annotation_name_side = "left",
+    height = unit(4, "cm")
+  )
+  
+  residues <- as.numeric(colnames(heatmap_matrix))
+  
+  colorbar_df <- get_residueindex_colors(residues, rev = FALSE)
+  
+  annotation_df <- data.frame(NGL_Color = as.character(residues))
+  rownames(annotation_df) <- as.character(residues)
+  
+  annotation_colors <- list(
+    NGL_Color = setNames(colorbar_df$color, as.character(residues))
+  )
+  
+  rsa_vector <- data_subset_chain %>%
+    filter(plot_posno %in% residues) %>%
+    arrange(match(plot_posno, residues)) %>%
+    pull(`RSA Shrake-Rupley`)
+  names(rsa_vector) <- as.character(residues)
+  
+  rsa_colors <- circlize::colorRamp2(c(0, 1), c("#E69F00", "#56B4E9"))
+  
+  # InterPro domain mapping
+  interpro_domains <- data_interpro_filtered %>%
+    filter(tolower(Protein_accession) %in% tolower(c(structure_entry, protein_name, TIGR4_name))) %>%
+    select(Start, End, Description) %>%
+    pmap_dfr(function(Start, End, Description) {
+      tibble(
+        resno = seq(Start, End),
+        Description = Description
+      )
+    })
+  
+  domain_vector <- rep(NA_character_, length(residues))
+  names(domain_vector) <- as.character(residues)
+  
+  matching_indices <- match(interpro_domains$resno, residues)
+  domain_vector[matching_indices[!is.na(matching_indices)]] <- interpro_domains$Description[!is.na(matching_indices)]
+  
+  unique_domains <- na.omit(unique(domain_vector))
+  domain_colors  <- domain_description_colors[unique_domains]
+  
+  domain_blocks <- split(names(domain_vector)[!is.na(domain_vector)],
+                         domain_vector[!is.na(domain_vector)])
+  
+  domain_blocks_ranges <- lapply(domain_blocks, function(res_indices) {
+    indices <- which(names(domain_vector) %in% res_indices)
+    if (length(indices) == 0) return(NULL)
+    range(indices)
+  })
+  domain_blocks_ranges <- Filter(Negate(is.null), domain_blocks_ranges)
+  
+  if (length(domain_blocks_ranges) > 0) {
+    domain_align_to <- lapply(domain_blocks_ranges, function(rng) seq(rng[1], rng[2]))
+    
+    annotation_domain <- anno_block(
+      align_to = domain_align_to,
+      panel_fun = function(index, label) {
+        grid.rect(gp = gpar(fill = domain_colors[[label]], col = "black"))
+        block_width <- length(index)
+        font_size <- min(1 + 1.2 * sqrt(block_width), 15)
+        grid.text(label, 0.5, 0.5, gp = gpar(col = "white", fontsize = font_size))
+      },
+      height = unit(1, "cm"),
+      show_name = TRUE
+    )
+  } else {
+    annotation_domain <- NULL
+  }
+  
+  # Bottom annotation
+  if (!is.null(annotation_domain)) {
+    bottom_annot <- HeatmapAnnotation(
+      `Aligned Position` = annotation_df$NGL_Color,
+      `RSA` = rsa_vector,
+      `Domain hit` = annotation_domain,
+      col = list(
+        `Aligned Position` = annotation_colors$NGL_Color,
+        `RSA` = rsa_colors
+      ),
+      annotation_name_side = "right",
+      show_legend = c(FALSE, TRUE, FALSE),
+      na_col = "white",
+      which = "column"
+    )
+  } else {
+    bottom_annot <- HeatmapAnnotation(
+      `Aligned Position` = annotation_df$NGL_Color,
+      `RSA` = rsa_vector,
+      col = list(
+        `Aligned Position` = annotation_colors$NGL_Color,
+        `RSA` = rsa_colors
+      ),
+      annotation_name_side = "right",
+      show_legend = c(FALSE, TRUE),
+      na_col = "white",
+      which = "column"
+    )
+  }
+  
+  # Heatmap
+  ht <- Heatmap(
+    heatmap_matrix,
+    name = "Score",
+    cluster_rows = TRUE,
+    cluster_columns = FALSE,
+    column_title = paste0(protein_name, " (structure: ", structure_entry, ")"),
+    col = colorRampPalette(c("blue", "gray95", "red"))(50),
+    top_annotation = top_annot,
+    bottom_annotation = bottom_annot,
+    show_column_names = FALSE
+  )
+  
+  png(filename = paste0("output/figures/heatmap/domain/",
+                        protein_class, "_", protein_name, "_",
+                        structure_entry, "_heatmap.png"),
+      width = 14, height = 10, units = "in", res = 300, bg = "white")
+  
+  figure <- draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+  dev.off()
+  
+  print(figure)
+}
 
-```{r}
-data_predictions_sequencebased %>% 
-  filter(PDB == "5SWA")
-
-data_predictions_structurebased %>% 
-  filter(PDB == "5SWA")
-
-data_predictions %>% 
-  filter(PDB == "5SWA")
 ```
 
 
@@ -1998,6 +2188,8 @@ pivot_list <- c(
   "Epigraph_score"
 )
 
+score_cols
+
 score_label_map <- c(
         "BepiPred-2.0 probability" = "BepiPred 2.0",
         "BepiPred-3.0 score" = "BepiPred 3.0",
@@ -2101,7 +2293,7 @@ for (PDB_entry in unique(data_predictions_with_variability_normalized$PDB)) {
 ```
 
 
-# summary statistics
+# Epitope score ~ variability summary statistics 
 ```{r}
 global_pLDDT_minimum <- 80
 
@@ -2567,7 +2759,9 @@ regression_results_all
 ## var only
 ```{r}
 RSA_min <- 0.15
-var_freq_min <- 0.05
+var_freq_min <- 0.00
+
+pivot_list <- score_cols
 
 class_results_residue <- high_confidence_proteins_with_seroprof %>%
   
@@ -3849,7 +4043,7 @@ results_all_radius_classification %>%
     strip.background = element_rect(fill = "gray90"),
     strip.text = element_text(size = 12)
   ) 
-```
+```  
 
 ```{, fig.width=14}
 p_adjust_method <- "BH"
@@ -4498,3 +4692,399 @@ ggplot(pca_scores, aes(x = PC1, y = PC2, label = score_type)) +
   labs(title = "PCA of concatenated epitope prediction scores across different tools", x = "PC1", y = "PC2") +
   theme_minimal()
 ```
+
+# Variability ~ Epitope summary statistics
+Use Discotope-3.0 calibrated score
+The calibrated score thresholds correspond to observed epitope percentile scores in the validation set, matching expected recall rates at the given thresholds (see paper).
+
+Higher confidence (1.50, recall up to ~30 %)
+Moderate confidence (0.90, recall up to ~50 %, default)
+Lower confidence (0.40, recall up to ~70 %)
+
+```{r}
+library("ggmosaic")
+```
+
+```{r}
+colnames(data_predictions_with_variability)
+```
+
+
+```{r}
+snp_thr <- 0.0
+d3_thr <- 1.5
+indel_thr <- 0.0
+
+d3_classification <- data_predictions_with_variability %>%
+  mutate(
+    d3_class = case_when(
+      "DiscoTope-3.0_calibrated_score" >= 1.5 ~ "high",
+      "DiscoTope-3.0_calibrated_score" < 1.5 & "DiscoTope-3.0_calibrated_score" >= 0.9 ~ "moderate",
+      "DiscoTope-3.0_calibrated_score" < 0.9 ~ "low"
+    ),
+    d3_bin_class = case_when(
+      "DiscoTope-3.0_calibrated_score" >= d3_thr ~ "epi",
+      "DiscoTope-3.0_calibrated_score" < d3_thr ~ "nepi"
+    ),
+    var_class = case_when(
+      snp_thr > var_thr ~ "var",
+      snp_thr <= var_thr ~ "nvar"
+    ),
+    indel_class = case_when(
+      indel_freq > indel_thr ~ "indel",
+      TRUE ~ "nindel"
+    ),
+    indelvar_class = interaction(indel_class, var_class)
+  )
+
+d3_classification
+```
+
+```{r}
+for (structure_index in na.omit(sort(unique(d3_classification$structure)))[4]) {
+  protein_name <- d3_classification %>% 
+    filter(structure == structure_index) %>%
+    pull(protein) %>%
+    unique()
+  
+  temp_df <- d3_classification %>%
+    filter(structure == structure_index) %>%
+    drop_na(d3_class, var_class, indel_class) %>%
+    group_by(protein, structure, chain, d3_bin_class) %>%
+    mutate(
+      d3_bin_class   = factor(d3_bin_class, levels = c("epi", "nepi")),
+      # rename var/nvar before interaction
+      snp_class      = ifelse(var_class == "var", "snp", "nsnp"),
+      snpindel_class = interaction(snp_class, indel_class, sep = ".")
+    )
+  
+  # Mosaic plot (with snp.indel scheme)
+  plot <- temp_df %>%
+    mutate(
+      d3_bin_class   = factor(d3_bin_class, levels = c("epi", "nepi"),
+                              labels = c("epitope", "non-epitope")),
+      snpindel_class = factor(snpindel_class,
+                              levels = c("snp.indel", "snp.nindel", "nsnp.indel", "nsnp.nindel"),
+                              labels = c("SNP+indel",
+                                         "SNP+non-indel",
+                                         "non-SNP+indel",
+                                         "non-SNP+non-indel"))
+    ) %>%
+    ggplot() +
+    geom_mosaic(
+      aes(x = product(snpindel_class, d3_bin_class), 
+          fill = snpindel_class), show.legend = TRUE
+    ) +
+    geom_mosaic_text(aes(x = product(snpindel_class, d3_bin_class),
+                         label = after_stat(.wt)), check_overlap = TRUE, size = 4) +
+    labs(
+      title = paste0("Mosaic Plot SNP/Indel vs Epitope\n(", protein_name,", ", structure_index,")"),
+      x = "",
+      y = ""
+    ) +
+    scale_fill_manual(
+      values = c("SNP+indel"         = "#E69F00",  # orange
+                 "SNP+non-indel"     = "#F0E442",  # yellow
+                 "non-SNP+indel"     = "#009E73",  # green
+                 "non-SNP+non-indel" = "#56B4E9")  # blue
+    ) +
+    theme_minimal() +
+    theme(      
+      axis.title.x = element_text(size = 15),
+      axis.title.y = element_text(size = 15),
+      axis.text.x  = element_text(size = 12),
+      axis.text.y  = element_text(size = 12)
+    )
+  
+  print(plot)
+}
+
+
+
+```
+
+
+```{r}
+for (structure_index in na.omit(sort(unique(d3_classification$structure)))[10]) {
+  protein_name <- d3_classification %>% 
+    filter(structure == structure_index) %>%
+    pull(protein) %>%
+    unique()
+  
+  temp_df <- d3_classification %>%
+    filter(structure == structure_index) %>%
+    drop_na(d3_class, var_class) %>%
+    group_by(protein, structure, chain, d3_bin_class, var_class) %>%
+    mutate(
+      d3_bin_class = factor(d3_bin_class, levels = c("epi", "nepi")),
+      var_class = factor(var_class, levels = c("var", "nvar"))
+    )
+  
+  table_matrix <- table(temp_df$d3_bin_class, temp_df$var_class, useNA = "ifany")
+  
+  if (nrow(table_matrix) < 2 || ncol(table_matrix) < 2) {
+    message("Skipping structure ", structure_index, 
+            " (protein: ", protein_name, 
+            ") due to missing d3_bin_class or var_class levels.")
+    next
+  }
+  
+  fisher_res <- fisher.test(table_matrix)
+  p_value <- fisher_res$p.value
+  ci_lower <- fisher_res$conf.int[1]
+  ci_upper <- fisher_res$conf.int[2]
+  
+  # Calculate odds ratio: (epi_var/epi_nvar) / (nepi_var/nepi_nvar)
+  epi_var <- table_matrix["epi", "var"]
+  epi_nvar <- table_matrix["epi", "nvar"]
+  nepi_var <- table_matrix["nepi", "var"]
+  nepi_nvar <- table_matrix["nepi", "nvar"]
+  
+  # Add 0.5 to all counts if any count is zero to avoid division by zero (Haldane-Anscombe correction)
+  if (any(c(epi_var, epi_nvar, nepi_var, nepi_nvar) == 0)) {
+    epi_var <- epi_var + 0.5
+    epi_nvar <- epi_nvar + 0.5
+    nepi_var <- nepi_var + 0.5
+    nepi_nvar <- nepi_nvar + 0.5
+  }
+  
+  odds_epi <- epi_var / epi_nvar
+  odds_nepi <- nepi_var / nepi_nvar
+  odds_ratio <- odds_epi / odds_nepi
+  
+  # Plot mosaic
+  #mosaicplot(
+  #  table_matrix, 
+  #  color = TRUE,
+  #  main = paste0("Mosaic Plot of Epitope vs Variability (across all proteins)"),
+  #  sub = paste0("Odds Ratio (var|epi vs var|nepi): ", round(odds_ratio, 2),"\n",
+  #               "Fisher's Exact test p-value: ", signif(p_value,3))
+  #)
+  
+  plot <- temp_df %>%
+    mutate(
+      d3_bin_class = factor(d3_bin_class, levels = c("epi", "nepi"),
+                            labels = c("epitope", "non-epitope")),
+      var_class = factor(var_class, levels = c("var", "nvar"),
+                         labels = c("variable", "non-variable"))
+    ) %>%
+    ggplot() +
+    geom_mosaic(
+      aes(x = product(var_class, d3_bin_class), 
+          fill = var_class), show.legend = FALSE
+    ) +
+    geom_mosaic_text(aes(x = product(var_class, d3_bin_class),
+                         label = after_stat(.wt)), check_overlap = TRUE, size = 4) +
+    
+    labs(
+      title = paste0("Mosaic Plot Variability vs Epitope\n(", protein_name,", ", structure_index,")"),
+      subtitle = paste0(
+        "variable|epitope vs variable|non-epitope: \n",
+        "Odds Ratio: ", round(odds_ratio, 2),
+        " (95% CI: ",signif(ci_lower,2),"-",signif(ci_upper,2),")\n",
+        "Fisher's Exact Test p = ", ifelse(p_value < 0.001, "< 0.001", signif(p_value, 3))
+      ),
+      x = "",
+      y = "",
+    ) +
+    scale_fill_manual(
+      values = c("non-variable" = "#E69F00", "variable" = "#56B4E9")
+    ) +
+    theme_minimal() +
+    theme(      
+      axis.title.x = element_text(size = 15),
+      axis.title.y = element_text(size = 15),
+      axis.text.x = element_text(size = 12),
+      axis.text.y = element_text(size = 12)
+    )
+  
+  print(plot)
+  
+  ggsave(
+      filename = paste0("output/figures/mosaic/", structure_index,"_mosaic.png"),
+      plot = plot,
+      width = 5, height = 3, dpi = 300, bg = "white"
+    )
+}
+
+
+```
+
+```{r}
+for (proteinclass_index in na.omit(sort(unique(d3_classification$proteinclass)))) {
+  temp_df <- d3_classification %>%
+    filter(proteinclass == proteinclass_index) %>%
+    drop_na(d3_class, var_class) %>%
+    group_by(protein, structure, chain, d3_bin_class, var_class) %>%
+    mutate(
+      d3_bin_class = factor(d3_bin_class, levels = c("epi", "nepi")),
+      var_class = factor(var_class, levels = c("var", "nvar"))
+    )
+  
+  table_matrix <- table(temp_df$d3_bin_class, temp_df$var_class, useNA = "ifany")
+  
+  fisher_res <- fisher.test(table_matrix)
+  p_value <- fisher_res$p.value
+  ci_lower <- fisher_res$conf.int[1]
+  ci_upper <- fisher_res$conf.int[2]
+
+  
+  # Calculate odds ratio: (epi_var/epi_nvar) / (nepi_var/nepi_nvar)
+  epi_var <- table_matrix["epi", "var"]
+  epi_nvar <- table_matrix["epi", "nvar"]
+  nepi_var <- table_matrix["nepi", "var"]
+  nepi_nvar <- table_matrix["nepi", "nvar"]
+  
+  # Add 0.5 to all counts if any count is zero to avoid division by zero (Haldane-Anscombe correction)
+  if (any(c(epi_var, epi_nvar, nepi_var, nepi_nvar) == 0)) {
+    epi_var <- epi_var + 0.5
+    epi_nvar <- epi_nvar + 0.5
+    nepi_var <- nepi_var + 0.5
+    nepi_nvar <- nepi_nvar + 0.5
+  }
+  
+  odds_epi <- epi_var / epi_nvar
+  odds_nepi <- nepi_var / nepi_nvar
+  odds_ratio <- odds_epi / odds_nepi
+  
+  # Plot mosaic
+  #mosaicplot(
+  #  table_matrix, 
+  #  color = TRUE,
+  #  main = paste0("Mosaic Plot of Epitope vs Variability (across all proteins)"),
+  #  sub = paste0("Odds Ratio (var|epi vs var|nepi): ", round(odds_ratio, 2),"\n",
+  #               "Fisher's Exact test p-value: ", signif(p_value,3))
+  #)
+  
+  plot <- temp_df %>%
+    mutate(
+      d3_bin_class = factor(d3_bin_class, levels = c("epi", "nepi"),
+                            labels = c("epitope", "non-epitope")),
+      var_class = factor(var_class, levels = c("var", "nvar"),
+                         labels = c("variable", "non-variable"))
+    ) %>%
+    ggplot() +
+    geom_mosaic(
+      aes(x = product(var_class, d3_bin_class), 
+          fill = var_class), show.legend = FALSE
+    ) +
+    geom_mosaic_text(aes(x = product(var_class, d3_bin_class),
+                         label = after_stat(.wt)), check_overlap = TRUE, size = 4) +
+    
+    labs(
+      title = paste0("Mosaic Plot of Variability vs Epitope \n(", proteinclass_index, ")"),
+      subtitle = paste0(
+        "Odds Ratio (variable|epitope vs variable|non-epitope): ", round(odds_ratio, 2),
+        " (95% CI: ",signif(ci_lower,2),"-",signif(ci_upper,2),")\n",
+        "Fisher's Exact Test p = ", ifelse(p_value < 0.001, "< 0.001", signif(p_value, 3))
+      ),
+      x = "",
+      y = "",
+    ) +
+    scale_fill_manual(
+      values = c("non-variable" = "#E69F00", "variable" = "#56B4E9")
+    ) +
+    theme_minimal() +
+    theme(      
+      axis.title.x = element_text(size = 15),
+      axis.title.y = element_text(size = 15),
+      axis.text.x = element_text(size = 12),
+      axis.text.y = element_text(size = 12)
+    )
+  
+  print(plot)
+}
+
+```
+
+```{r}
+temp_df <- d3_classification %>%
+  drop_na(d3_class, var_class) %>%
+  group_by(protein, structure, chain, d3_bin_class, var_class)
+  
+  table_matrix <- table(temp_df$d3_bin_class, temp_df$var_class, useNA = "ifany")
+  
+  fisher_res <- fisher.test(table_matrix)
+  p_value <- fisher_res$p.value
+  
+  # Calculate odds ratio: (epi_var/epi_nvar) / (nepi_var/nepi_nvar)
+  epi_var <- table_matrix["epi", "var"]
+  epi_nvar <- table_matrix["epi", "nvar"]
+  nepi_var <- table_matrix["nepi", "var"]
+  nepi_nvar <- table_matrix["nepi", "nvar"]
+  
+  # Add 0.5 to all counts if any count is zero to avoid division by zero (Haldane-Anscombe correction)
+  if (any(c(epi_var, epi_nvar, nepi_var, nepi_nvar) == 0)) {
+    epi_var <- epi_var + 0.5
+    epi_nvar <- epi_nvar + 0.5
+    nepi_var <- nepi_var + 0.5
+    nepi_nvar <- nepi_nvar + 0.5
+  }
+  
+  odds_epi <- epi_var / epi_nvar
+  odds_nepi <- nepi_var / nepi_nvar
+  odds_ratio <- odds_epi / odds_nepi
+  
+  # Plot mosaic
+  #mosaicplot(
+  #  table_matrix, 
+  #  color = TRUE,
+  #  main = paste0("Mosaic Plot of Epitope vs Variability (across all proteins)"),
+  #  sub = paste0("Odds Ratio (var|epi vs var|nepi): ", round(odds_ratio, 2),"\n",
+  #               "Fisher's Exact test p-value: ", signif(p_value,3))
+  #)
+  
+  temp_df %>%
+    mutate(
+      d3_bin_class = factor(d3_bin_class, levels = c("epi", "nepi"),
+                            labels = c("epitope", "non-epitope")),
+      var_class = factor(var_class, levels = c("var", "nvar"),
+                         labels = c("variable", "non-variable"))
+    ) %>%
+    ggplot() +
+    geom_mosaic(
+      aes(x = product(var_class, d3_bin_class), 
+          fill = var_class), show.legend = FALSE
+    ) +
+    geom_mosaic_text(aes(x = product(var_class, d3_bin_class),
+                         label = after_stat(.wt)), check_overlap = TRUE, size = 4) +
+    
+    labs(
+      title = "Mosaic Plot of Epitope vs Variability (across all proteins)",
+      subtitle = paste0(
+        "Odds Ratio (var|epi vs var|nepi): ", round(odds_ratio, 2), "\n",
+        "Fisher's Exact p = ", signif(p_value, 3)
+      ),
+      x = "",
+      y = "",
+    ) +
+    scale_fill_manual(
+      values = c("non-variable" = "#E69F00", "variable" = "#56B4E9")
+      ) +
+    theme_minimal() +
+    theme(      
+      axis.title.x = element_text(size = 15),
+      axis.title.y = element_text(size = 15),
+      axis.text.x = element_text(size = 12),
+      axis.text.y = element_text(size = 12)
+      )
+  
+```
+
+```{r}
+temp_df <- d3_classification %>%
+  #filter(structure == structure_index) %>%
+  drop_na(d3_class, var_class) %>%
+  group_by(protein, structure, chain, d3_class, var_class)
+
+table_matrix <- table(temp_df$d3_class, temp_df$var_class, useNA = "ifany")
+
+# Plot mosaic
+mosaicplot(
+  table_matrix, 
+  color = TRUE,
+  main = paste0("Mosaic Plot of Epitope vs Variability (across all proteins)")
+)
+```
+
+

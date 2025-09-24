@@ -470,6 +470,11 @@ data_Epigraph <- data_Epigraph_raw %>%
 data_Epigraph %>% filter(is.na(PDB))
 ```
 
+```{r}
+data_Epigraph %>% filter(protein == "GlpO")
+```
+
+
 ## Store results as csv
 ```{r}
 write.csv(data_Epigraph,
@@ -616,7 +621,7 @@ interpro_coltypes <- cols(
 )
 
 # Load the file with correct column types and headers
-data_interpro <- read_tsv(
+data_interpro_raw <- read_tsv(
   interpro_files,
   col_names = interpro_colnames,
   col_types = interpro_coltypes
@@ -625,7 +630,36 @@ data_interpro <- read_tsv(
 ```
 
 ```{r}
-data_interpro %>% filter(Protein_accession == "alia_model_4_fold_0.pdb") %>%
+map_namesclasspdb_AF3 <- read.csv("data/map_nameclass_pdbAF3.csv")
+```
+
+```{r}
+data_interpro <- data_interpro_raw %>% mutate(
+  structure = case_when(
+    Protein_accession %in% map_namesclasspdb_AF3$PDB ~ Protein_accession,
+    tolower(Protein_accession) %in% tolower(map_namesclasspdb_AF3$protein) ~ 
+      map_namesclasspdb_AF3$AF3[
+        match(tolower(Protein_accession), tolower(map_namesclasspdb_AF3$protein))
+      ],
+    Protein_accession %in% map_namesclasspdb_AF3$TIGR4_name ~ {
+        idx <- match(Protein_accession, map_namesclasspdb_AF3$TIGR4_name)
+        ifelse(!is.na(map_namesclasspdb_AF3$PDB[idx]),
+               map_namesclasspdb_AF3$PDB[idx],
+               map_namesclasspdb_AF3$AF3[idx])
+      },
+    TRUE ~ NA_character_
+  )
+)
+```
+
+
+```{r}
+data_interpro %>% select(Protein_accession, structure) %>% unique()
+```
+
+
+```{r}
+data_interpro %>% filter(structure == "alia_model_4_fold_0.pdb") %>%
   select(Analysis, Signature_description, InterPro_accession, Start, End, Score) %>%
   arrange(-log10(Score))
 ```
@@ -655,18 +689,18 @@ data_interpro %>%
 ```
 
 ```{r}
-data_interpro %>% pull(Protein_accession) %>% unique()
+data_interpro %>% pull(structure) %>% unique()
 ```
 
 
 ```{r, fig.width=14, warning=FALSE}
 charweight = 0.3
 
-for (protein in sort(unique(data_interpro$Protein_accession))) {
+for (protein in sort(unique(data_interpro$structure))) {
   print(protein)
   
   data_interpro_subset <- data_interpro %>%
-    filter(Protein_accession == protein,
+    filter(structure == protein,
            !is.na(Score)) %>%
     mutate(e_value = -log10(Score),
            Description = case_when(
@@ -791,7 +825,7 @@ keep_non_overlapping <- function(df) {
 
 ```{r}
 data_interpro %>%
-  filter(Protein_accession == "2BIB",
+  filter(Protein_accession == "trxB",
          !is.na(Score)) %>%
   mutate(e_value = -log10(Score)) %>%
   arrange(desc(e_value))
@@ -799,15 +833,43 @@ data_interpro %>%
 
 
 ```{r}
+get_shortest <- function(x) {
+  sapply(x, function(val) {
+    if (is.na(val) || val == "-") return(NA_character_)
+    parts <- str_split(val, ",")[[1]]
+    parts <- str_trim(parts)
+    parts[which.min(nchar(parts))]
+  })
+}
+
 filtered_hits <- data_interpro %>%
-  filter(Protein_accession == "3E0M") %>%
   group_by(Protein_accession) %>%
-  mutate(Description = case_when(
-             InterPro_description != "-" ~ InterPro_description,
-             !is.na(InterPro_description) ~ InterPro_description,
-             TRUE ~ Signature_description
-             )
-         ) %>%
+  mutate(
+    Description = case_when(
+      # case 1: only InterPro is valid
+      (!is.na(InterPro_description) & InterPro_description != "-") &
+        (is.na(Signature_description) | Signature_description == "-") ~ 
+        get_shortest(InterPro_description),
+      
+      # case 2: only Signature is valid
+      (!is.na(Signature_description) & Signature_description != "-") &
+        (is.na(InterPro_description) | InterPro_description == "-") ~ 
+        get_shortest(Signature_description),
+      
+      # case 3: both valid → take the shortest of the two shortest splits
+      (!is.na(InterPro_description) & InterPro_description != "-") &
+        (!is.na(Signature_description) & Signature_description != "-") ~ {
+          interpro_short  <- get_shortest(InterPro_description)
+          signature_short <- get_shortest(Signature_description)
+          ifelse(nchar(interpro_short) <= nchar(signature_short), 
+                 interpro_short, 
+                 signature_short)
+        },
+      
+      # fallback
+      TRUE ~ NA_character_
+    )
+  ) %>%
   ungroup() %>%
   filter(!is.na(Description), Description != "-") %>%
   arrange(Protein_accession, Score, Description) %>%
@@ -815,27 +877,32 @@ filtered_hits <- data_interpro %>%
   group_modify(~keep_non_overlapping(.x)) %>%
   ungroup()
 
-filtered_hits
 
+filtered_hits
 ```
 
 ```{r}
 data_interpro_filtered <- data_interpro %>%
   group_by(Protein_accession) %>%
   mutate(Description = case_when(
-             InterPro_description == "-" ~ Signature_description,
-             is.na(InterPro_description) ~ Signature_description,
-             TRUE ~ InterPro_description
-             )
-         ) %>%
+    InterPro_description != "-" ~ InterPro_description,
+    !is.na(InterPro_description) ~ InterPro_description,
+    TRUE ~ Signature_description
+  ),
+  Description = sapply(str_split(Description, ","), function(x) {
+    x_trimmed <- str_trim(x)              # remove extra spaces
+    x_shortest <- x_trimmed[which.min(nchar(x_trimmed))] # keep shortest
+    x_shortest
+  })
+  ) %>%
   filter(
     !is.na(Description), 
     Description != "-",
     !Analysis %in% Analysis_remove_selection
-    ) %>%
-  arrange(Protein_accession, Score) %>%
+  ) %>%
+  arrange(structure, Score) %>%
   group_modify(~ keep_non_overlapping(.x)) %>%
-  select(Protein_accession, Sequence_length, Start, End, Description, Analysis, e_value, Score) %>%
+  select(structure, Sequence_length, Start, End, Description, InterPro_description, Signature_description, Analysis, e_value, Score) %>%
   ungroup()
 
 data_interpro_filtered
