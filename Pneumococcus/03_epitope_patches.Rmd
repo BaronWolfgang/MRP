@@ -1,0 +1,354 @@
+---
+title: "Streptococcus pneumoniae patch-based statistics"
+author: "Jan Paul van Meenen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+#Packages
+```{r}
+source("requirements/packages.R")
+```
+
+```{r}
+data_predictions_with_variability <- read.csv("output/data_predictions_with_variability.csv", check.names = FALSE) #%>%
+  #distinct(structure,chain,x,y,z, .keep_all = TRUE)
+
+data_predictions_with_variability
+```
+
+
+#clustering epitopes 3D
+```{r}
+library(igraph)
+
+distance_cutoff <- 6 #angstrom
+
+for (structure_index in na.omit(sort(unique(data_predictions_with_variability$structure)))[4]) {
+  data_subset <- data_predictions_with_variability %>% 
+    filter(structure == structure_index)
+  
+  protein_name <- data_subset %>% 
+    pull(protein) %>%
+    unique()
+  
+  chain_subset <- data_subset %>%
+    drop_na(chain) %>%
+    pull(chain) %>%
+    unique()
+  
+  message("Processing ", protein_name, " (", structure_index, ")")
+  
+  pdb_object <- read.pdb.custom(pdb_entry = structure_index, pdb_path = pdbs_path)
+  
+  #Distance Matrix
+  heavy_atoms_dm <- dm(
+    pdb_object, 
+    inds = atom.select(pdb_object, chain = chain_subset, type = "ATOM", alt = c(NA, "A")),
+    grp = TRUE
+  )
+  
+  resnos <- pdb_object$atom %>% filter(chain == chain_subset, type == "ATOM") %>% pull(resno) %>% unique()
+  
+  rownames(heavy_atoms_dm) <- resnos
+  colnames(heavy_atoms_dm) <- resnos
+  
+  #all residue adjacency matrix
+  adj_mat <- heavy_atoms_dm < distance_cutoff
+  adj_mat[is.na(adj_mat)] <- FALSE
+  diag(adj_mat) <- FALSE
+  
+  g <- graph_from_adjacency_matrix(adj_mat, mode = "undirected")
+  V(g)$name <- resnos
+  
+  #Surface
+  surface_resno <- data_subset %>%
+    filter(`RSA Shrake-Rupley` > 0.15) %>%
+    pull(resno)
+  
+  sur_adj_mat <- heavy_atoms_dm[as.character(surface_resno), as.character(surface_resno)] < distance_cutoff
+  sur_adj_mat[is.na(sur_adj_mat)] <- FALSE
+  diag(sur_adj_mat) <- FALSE
+  
+  sur_g <- graph_from_adjacency_matrix(sur_adj_mat, mode = "undirected")
+  V(sur_g)$name <- surface_resno
+  
+  # Graph clustering
+  epi_g <- graph_from_adjacency_matrix(epi_adj_mat)
+  
+  #Extract epitopes
+  dt3_epitopes_resno <- data_subset %>%
+    filter(`DiscoTope-3.0_calibrated_score` > 1.5) %>%
+    pull(resno)
+  
+  if (length(dt3_epitopes_resno) < 2) next
+  
+  epi_adj_mat <- heavy_atoms_dm[as.character(dt3_epitopes_resno), as.character(dt3_epitopes_resno)] < distance_cutoff
+  epi_adj_mat[is.na(epi_adj_mat)] <- FALSE
+  diag(epi_adj_mat) <- FALSE
+  
+  # Graph clustering
+  epi_g <- graph_from_adjacency_matrix(epi_adj_mat)
+  clusters <- components(epi_g)
+  
+    # --- Color nodes in the general graph ---
+  V(sur_g)$color <- "grey80"  # default for non-epitope residues
+  
+  n_clusters <- length(unique(clusters$membership))
+  cluster_colors <- rainbow(n_clusters) 
+  
+  for (i in seq_len(n_clusters)) {
+    cluster_resnos <- dt3_epitopes_resno[clusters$membership == i]
+    V(sur_g)$color[match(cluster_resnos, V(sur_g)$name)] <- cluster_colors[i]
+  }
+  
+  # --- Plot the residue contact graph ---
+  plot(
+    sur_g,
+    vertex.label = NA,
+    vertex.size = 6,
+    edge.color = "grey85",
+    layout = layout_with_fr(sur_g)
+  )
+  
+  view <- NGLVieweR(paste0(pdbs_path,structure_index,".pdb")) %>%
+    stageParameters(backgroundColor = "white") %>%
+    addRepresentation(type = "cartoon",
+                        param = list(name = "base", 
+                                     colorScheme = "uniform",
+                                     sele = paste0("/0 AND :",
+                                                   chain_subset
+                                                   )
+                                     )
+    )
+  
+  for (i in seq_len(n_clusters)) {
+    view <- view %>%
+      addRepresentation("surface",
+                 param = list(
+                   name = paste0("sel_epi", i),
+                   sele = paste0(
+                     "/0 AND :",
+                     chain_subset,
+                     " AND (",
+                     paste(dt3_epitopes_resno[clusters$membership == i], collapse = " or "),
+                     ")"
+                   ),
+                   colorValue = cluster_colors[i]
+                 )
+    )
+  }
+  
+  print(view)
+  
+  
+}
+```
+
+
+#clustering epitope residues into patches, statistics
+```{r}
+sample_connected_patch <- function(g, patch_size) {
+  # pick a random starting node
+  start_node <- sample(V(g)$name, 1)
+  patch <- start_node
+  
+  while(length(patch) < patch_size) {
+    # get neighbors of current patch (by vertex indices)
+    patch_vertices <- V(g)[name %in% patch]
+    neighbors <- unlist(ego(g, order = 1, nodes = patch_vertices, mindist = 1))
+    neighbors <- V(g)[neighbors]$name
+    # remove already included residues
+    neighbors <- setdiff(neighbors, patch)
+    if(length(neighbors) == 0) break
+    # add one neighbor at random
+    patch <- c(patch, sample(neighbors, 1))
+  }
+  
+  return(patch)
+}
+```
+
+```{r}
+"output/AlphaFold3/generated_pdb/vws/"
+```
+
+```{r}
+AF3_pdbs_path
+```
+
+```{r}
+data_predictions_with_variability %>%
+  filter(is.na(var_counts))
+```
+
+
+```{r}
+set.seed(1234)
+distance_cutoff <- 6
+n_permutations <- 5000
+var_min <- 2
+dt3_min <- 1.5 
+sur_min <- 0.15
+
+results_list <- list()
+
+# Binary classification: variable if var_counts > var_min
+for (structure_index in na.omit(sort(unique(data_predictions_with_variability$structure)))) {
+
+  data_subset <- data_predictions_with_variability %>% 
+    filter(structure == structure_index) %>%
+    mutate(is_var = var_counts > var_min)
+  
+  protein_name <- unique(data_subset$protein)
+  chain_subset <- data_subset %>% drop_na(chain) %>% pull(chain) %>% unique()
+  
+  message("Processing ", protein_name, " (", structure_index, ")")
+  
+  ifelse(!is.na(unique(data_subset$PDB)), 
+         pdb_object <- read.pdb.custom(pdb_entry = structure_index, pdb_path = pdbs_path),
+         pdb_object <- read.pdb.custom(pdb_entry = structure_index, pdb_path = AF3_pdbs_path)
+         )
+  
+  resnos <- unique(pdb_object$atom$resno[pdb_object$atom$chain == chain_subset & pdb_object$atom$type == "ATOM"])
+  
+  heavy_atoms_dm <- dm(
+    pdb_object,
+    inds = atom.select(pdb_object, chain = chain_subset, type = "ATOM", alt = c(NA, "A")),
+    grp = TRUE
+  )
+  rownames(heavy_atoms_dm) <- resnos
+  colnames(heavy_atoms_dm) <- resnos
+  
+  # Surface residues
+  surface_resno <- data_subset %>%
+    filter(
+      `RSA Shrake-Rupley` > sur_min,
+      !is.na(var_counts) #mask histags
+    ) %>%
+    pull(resno)
+  
+  sur_adj_mat <- heavy_atoms_dm[as.character(surface_resno), as.character(surface_resno)] < distance_cutoff
+  sur_adj_mat[is.na(sur_adj_mat)] <- FALSE
+  diag(sur_adj_mat) <- FALSE
+  
+  sur_g <- graph_from_adjacency_matrix(sur_adj_mat, mode = "undirected")
+  V(sur_g)$name <- surface_resno
+  
+  # Extract epitope residues
+  dt3_epitopes_resno <- data_subset %>%
+    filter(`DiscoTope-3.0_calibrated_score` > dt3_min) %>%
+    pull(resno)
+  
+  dt3_epitopes_resno <- intersect(dt3_epitopes_resno, surface_resno)
+  if (length(dt3_epitopes_resno) < 2) next
+  
+  # Epitope adjacency and clustering
+  epi_adj_mat <- heavy_atoms_dm[as.character(dt3_epitopes_resno), as.character(dt3_epitopes_resno)] < distance_cutoff
+  diag(epi_adj_mat) <- FALSE
+  epi_adj_mat[is.na(epi_adj_mat)] <- FALSE
+  
+  epi_g <- graph_from_adjacency_matrix(epi_adj_mat, mode = "undirected")
+  clusters <- components(epi_g)
+  
+  # --- Order clusters by size (largest first) ---
+  cluster_sizes <- table(clusters$membership)
+  cluster_order <- as.numeric(names(sort(cluster_sizes, decreasing = TRUE)))
+  
+  # Reassign cluster labels by descending size
+  ordered_membership <- match(clusters$membership, cluster_order)
+  
+  # Compute observed density per ordered cluster
+  observed_density <- map_dbl(seq_len(length(cluster_order)), function(i) {
+    res_in_cluster <- dt3_epitopes_resno[ordered_membership == i]
+    mean(data_subset$is_var[data_subset$resno %in% res_in_cluster], na.rm = TRUE)
+  })
+  
+  # Permutation test with connected patches
+  permuted_density <- map(seq_len(length(cluster_order)), function(i) {
+    cluster_size <- sum(ordered_membership == i)
+    replicate(n_permutations, {
+      sampled_patch <- sample_connected_patch(sur_g, cluster_size)
+      mean(data_subset$is_var[data_subset$resno %in% sampled_patch], na.rm = TRUE)
+    })
+  })
+  
+  # --- Assemble tibble with proper ordering ---
+  results_list[[structure_index]] <- tibble(
+    structure = structure_index,
+    protein = protein_name,
+    chain = chain_subset,
+    epitope_id = seq_len(length(cluster_order)),
+    epitope_size = as.numeric(cluster_sizes[cluster_order]),
+    epitope_residues = map(seq_len(length(cluster_order)), function(i) {
+      res_in_cluster <- dt3_epitopes_resno[ordered_membership == i]
+      paste0(
+        "[", data_subset$resid[data_subset$resno %in% res_in_cluster], "]",
+        res_in_cluster, ":", chain_subset
+      )
+    }),
+    observed_density = observed_density,
+    permuted_density = permuted_density,
+    mean_perm_density = map_dbl(permuted_density, ~ mean(.x, na.rm = TRUE)),
+    sd_perm_density = map_dbl(permuted_density, ~ sd(.x, na.rm = TRUE))
+  ) %>%
+    mutate(
+      # Z-score for reference
+      z_score = (observed_density - mean_perm_density) / sd_perm_density,
+      
+      # One-tailed (epitopes more variable than expected)
+      p_one_tailed = map2_dbl(observed_density, permuted_density, function(obs, perm) {
+                              (1 + sum(obs >= perm, na.rm = TRUE)) / (1 + length(perm))
+        }),
+      
+      # Two-tailed (epitopes differ from expected — could be more OR less variable)
+      p_two_tailed = map2_dbl(observed_density, permuted_density, function(obs, perm) {
+        mean_perm <- mean(perm, na.rm = TRUE)
+        (1 + sum(abs(perm - mean_perm) >= abs(obs - mean_perm), na.rm = TRUE)) / (1 + length(perm))
+      }),
+      
+      # Adjusted p-values (FDR)
+      p_one_tailed_adj = p.adjust(p_one_tailed, method = "fdr"),
+      p_two_tailed_adj = p.adjust(p_two_tailed, method = "fdr")
+    )
+}
+
+```
+
+```{r}
+saveRDS(results_list, "output/permutation_test.rds") 
+```
+
+```{r,fig.width = 14}
+results_list$`2BIB` %>%
+  unnest(permuted_density) %>%
+  ggplot(aes(x=permuted_density, fill = as.factor(epitope_id))) +
+  geom_histogram() + 
+  geom_vline(aes(xintercept = observed_density, col = as.factor(epitope_id))) +
+  facet_wrap(~epitope_id)
+```
+
+```{r}
+plots_list <- results_list %>%
+  map(~ ggplot(.x, aes(x = epitope_size, y = p_one_tailed)) +
+        geom_point() +
+        #geom_smooth(method = "loess", se = FALSE, color = "blue") +
+        theme_minimal() +
+        labs(
+          x = "Epitope Size",
+          y = "One-tailed p-value",
+          title = "Epitope Size vs. p-value"
+        ))
+
+results_list %>% imap_dfr(~ mutate(.x, protein = .y)) %>%
+  ggplot(aes(x= epitope_size, y=1-p_one_tailed)) +
+  geom_hline(yintercept = 1-0.05) +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    x = "Epitope Size",
+    y = "1 - p-value",
+    title = "Epitope Size vs. p-value"
+  )
+```
+

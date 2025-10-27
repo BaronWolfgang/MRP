@@ -36,6 +36,11 @@ aln_protein_names
 1. convert DNA to AA, removing any gaps in the aligned DNA sequences 
 2. redo the alignments on AA level using DECIPHER
 
+```{r}
+packageVersion("Biostrings")
+```
+
+
 ```{r, warning=FALSE}
 data_variability <- NULL
 

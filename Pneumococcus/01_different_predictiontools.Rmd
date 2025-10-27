@@ -634,6 +634,62 @@ map_namesclasspdb_AF3 <- read.csv("data/map_nameclass_pdbAF3.csv")
 ```
 
 ```{r}
+data_interpro_raw  %>% filter(Analysis == "TMHMM") %>% pull(Protein_accession) %>% unique()
+```
+
+```{r}
+data_interpro_raw %>% pull(Analysis) %>% unique()
+```
+
+```{r}
+get_interpro_type <- function(ipr_id) {
+  url <- paste0("https://www.ebi.ac.uk/interpro/api/entry/InterPro/", ipr_id)
+  
+  res <- tryCatch({
+    r <- GET(url)
+    if (status_code(r) == 200) {
+      data <- fromJSON(content(r, "text", encoding = "UTF-8"))
+      
+      # Correct path: metadata$type
+      type_field <- data$metadata$type
+      
+      # Return if present
+      if (!is.null(type_field) && length(type_field) > 0) {
+        return(paste(unique(type_field), collapse = ";"))
+      } else {
+        return(NA_character_)
+      }
+    } else {
+      return(NA_character_)
+    }
+  }, error = function(e) NA_character_)
+  
+  Sys.sleep(0.3) # be kind to the API
+  return(res)
+}
+
+# Fetch unique accessions
+accessions <- unique(na.omit(data_interpro_raw$InterPro_accession))
+
+# Apply the function to all accessions
+ipr_lookup <- tibble(
+  InterPro_accession = accessions,
+  InterPro_type = map_chr(accessions, get_interpro_type)
+)
+```
+
+```{}
+      Analysis %in% c("Pfam","NCBIfam", "PANTHER", "PRINTS", "Hamap", "SFLD", "PIRSF") ~ "Families",
+      Analysis %in% c("Pfam", "Gene3D", "ProSiteProfiles", "SUPERFAMILY", "SMART") ~ "Domains",
+      Analysis %in% c("MobiDBLite") ~ "IDR",
+      Analysis %in% c("Phobius", "SignalP_GRAM_POSITIVE", "Coils", "TMHMM") ~ "Localization",
+      Analysis %in% c("FunFam") ~ "FunFam",
+      Analysis %in% c("CDD") ~ "Conserved_Residues",
+      Analysis %in% c("ProSitePatterns") ~ "Binding_Site"
+```
+
+
+```{r}
 data_interpro <- data_interpro_raw %>% mutate(
   structure = case_when(
     Protein_accession %in% map_namesclasspdb_AF3$PDB ~ Protein_accession,
@@ -642,24 +698,48 @@ data_interpro <- data_interpro_raw %>% mutate(
         match(tolower(Protein_accession), tolower(map_namesclasspdb_AF3$protein))
       ],
     Protein_accession %in% map_namesclasspdb_AF3$TIGR4_name ~ {
-        idx <- match(Protein_accession, map_namesclasspdb_AF3$TIGR4_name)
-        ifelse(!is.na(map_namesclasspdb_AF3$PDB[idx]),
-               map_namesclasspdb_AF3$PDB[idx],
-               map_namesclasspdb_AF3$AF3[idx])
-      },
+      idx <- match(Protein_accession, map_namesclasspdb_AF3$TIGR4_name)
+      ifelse(!is.na(map_namesclasspdb_AF3$PDB[idx]),
+             map_namesclasspdb_AF3$PDB[idx],
+             map_namesclasspdb_AF3$AF3[idx])
+    },
     TRUE ~ NA_character_
   )
-)
+) %>% 
+  left_join(ipr_lookup, by = "InterPro_accession"
+  ) %>%
+  mutate(
+    Analysis_type = factor(case_when(
+      InterPro_type %in% c("family") ~ "Families",
+      InterPro_type %in% c("domain", "repeat") ~ "Domains",
+      InterPro_type %in% c("homologous_superfamily") ~ "Homologous_Superfamily",
+      InterPro_type %in% c("conserved_site") ~ "Conserved_Residues",
+      InterPro_type %in% c("active_site") ~ "Active_Site",
+      InterPro_type %in% c("binding_site") ~ "Binding_Site",
+      
+      Analysis %in% c("SUPERFAMILY") ~ "Homologous_Superfamily",
+      TRUE ~ "-"
+    ),
+    levels = c("Families", "Homologous_Superfamily", "Domains", "Binding_site", "Active_Site","Conserved_Residues","-"))
+  )
+```
+
+```{r}
+unique(ipr_lookup$InterPro_type)
 ```
 
 
 ```{r}
-data_interpro %>% select(Protein_accession, structure) %>% unique()
+data_interpro %>% filter(InterPro_type == "active_site")
+
+data_interpro %>% filter(Analysis == "ProSitePatterns")
 ```
 
 
+
+
 ```{r}
-data_interpro %>% filter(structure == "alia_model_4_fold_0.pdb") %>%
+data_interpro %>% filter(structure == "4Q2W") %>%
   select(Analysis, Signature_description, InterPro_accession, Start, End, Score) %>%
   arrange(-log10(Score))
 ```
@@ -689,7 +769,9 @@ data_interpro %>%
 ```
 
 ```{r}
-data_interpro %>% pull(structure) %>% unique()
+data_interpro %>% 
+  group_by(Analysis, InterPro_type) %>% 
+  summarize(n = n())
 ```
 
 
@@ -768,7 +850,8 @@ for (protein in sort(unique(data_interpro$structure))) {
       title = paste0("Domains in ", protein),
       x = "Amino acid position",
       y = "Analysis"
-    )
+    ) +
+    facet_wrap(~Analysis_type, ncol = 1, scales = "free_y")
   
   print(plot)
 }
@@ -781,7 +864,7 @@ We want to build up annotation, using the most significant (based on E-value) no
 
 ```{r}
 Analysis_remove_selection <- c(
-  "CDD"
+  "CDD", "PRINTS"
   )
 
 data_interpro %>%
@@ -798,7 +881,7 @@ data_interpro %>%
   arrange(Protein_accession, Score, Description) 
 ```
 
-```{r}
+```{}
 keep_non_overlapping <- function(df) {
   df <- df %>%
     filter(!is.na(Score),
@@ -823,16 +906,114 @@ keep_non_overlapping <- function(df) {
 }
 ```
 
-```{r}
-data_interpro %>%
-  filter(Protein_accession == "trxB",
-         !is.na(Score)) %>%
-  mutate(e_value = -log10(Score)) %>%
-  arrange(desc(e_value))
+```{r, v2}
+keep_non_overlapping <- function(df) {
+  
+  # Filter valid entries and compute e-values
+  df <- df %>%
+    filter(!is.na(Score), Score != 0) %>%
+    mutate(e_value = -log10(Score))
+  
+  # Define the order of Analysis_type priority
+  priority_order <- c("Homologous_Superfamily", "Domains", "-")
+  
+  # Initialize storage
+  kept <- list()
+  occupied_ranges <- IRanges()
+  
+  # Loop through Analysis_type priorities
+  for (atype in priority_order) {
+    
+    df_subset <- df %>%
+      filter(Analysis_type == atype) 
+    
+    # If nothing in this category, skip
+    if (nrow(df_subset) == 0) next
+    
+    if (atype == "Homologous_Superfamily") {
+      df_subset <- df_subset %>%
+        mutate(priority_flag = if_else(Analysis == "SUPERFAMILY", 1, 0)) %>%
+        arrange(desc(priority_flag), desc(e_value)) %>%
+        select(-priority_flag)
+    } else {
+      df_subset <- df_subset %>%
+        arrange(desc(e_value))
+    }
+    
+    for (i in seq_len(nrow(df_subset))) {
+      this_range <- IRanges(start = df_subset$Start[i], end = df_subset$End[i])
+      
+      # Keep only if not overlapping any previous ones
+      if (length(occupied_ranges) == 0 ||
+          length(findOverlaps(this_range, occupied_ranges)) == 0) {
+        occupied_ranges <- c(occupied_ranges, this_range)
+        kept[[length(kept) + 1]] <- df_subset[i, ]
+      }
+    }
+  }
+  
+  bind_rows(kept)
+}
 ```
 
 
 ```{r}
+data_interpro %>%
+  filter(Protein_accession == "2PMS",
+         !is.na(Score)) %>%
+  mutate(e_value = -log10(Score)) %>%
+  arrange(desc(e_value)) %>%
+  group_by(Protein_accession) %>%
+  group_modify(~keep_non_overlapping(.x)) 
+```
+
+
+```{r}
+data_interpro_filtered <- data_interpro %>%
+  group_by(Protein_accession) %>%
+  group_modify(~keep_non_overlapping(.x)) %>%
+  mutate(
+    Description = case_when(
+      # case 1: only InterPro is valid
+      (!is.na(InterPro_description) & InterPro_description != "-") &
+        (is.na(Signature_description) | Signature_description == "-") ~ 
+        InterPro_description,
+      
+      # case 2: only Signature is valid
+      (!is.na(Signature_description) & Signature_description != "-") &
+        (is.na(InterPro_description) | InterPro_description == "-") ~ 
+        Signature_description,
+      
+      # case 3: both valid → take the shortest of the two shortest splits
+      (!is.na(InterPro_description) & InterPro_description != "-") &
+        (!is.na(Signature_description) & Signature_description != "-") ~ {
+          interpro_short  <- InterPro_description
+          signature_short <- Signature_description
+          ifelse(nchar(interpro_short) <= nchar(signature_short), 
+                 interpro_short, 
+                 signature_short)
+        },
+      
+      # fallback
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  ungroup() %>%
+  filter(!is.na(Description), Description != "-") %>%
+  arrange(Protein_accession, Score, Description) %>%
+  ungroup()
+
+
+data_interpro_filtered
+```
+
+
+```{r}
+write.csv(data_interpro_filtered, "output/data_interpro_filtered.csv", row.names = FALSE)
+```
+
+
+```{}
 get_shortest <- function(x) {
   sapply(x, function(val) {
     if (is.na(val) || val == "-") return(NA_character_)
@@ -842,14 +1023,15 @@ get_shortest <- function(x) {
   })
 }
 
-filtered_hits <- data_interpro %>%
+data_interpro_filtered <- data_interpro %>%
   group_by(Protein_accession) %>%
+  group_modify(~keep_non_overlapping(.x)) %>%
   mutate(
     Description = case_when(
       # case 1: only InterPro is valid
       (!is.na(InterPro_description) & InterPro_description != "-") &
         (is.na(Signature_description) | Signature_description == "-") ~ 
-        get_shortest(InterPro_description),
+        (InterPro_description),
       
       # case 2: only Signature is valid
       (!is.na(Signature_description) & Signature_description != "-") &
@@ -873,15 +1055,13 @@ filtered_hits <- data_interpro %>%
   ungroup() %>%
   filter(!is.na(Description), Description != "-") %>%
   arrange(Protein_accession, Score, Description) %>%
-  group_by(Protein_accession) %>%
-  group_modify(~keep_non_overlapping(.x)) %>%
   ungroup()
 
 
-filtered_hits
+data_interpro_filtered
 ```
 
-```{r}
+```{}
 data_interpro_filtered <- data_interpro %>%
   group_by(Protein_accession) %>%
   mutate(Description = case_when(

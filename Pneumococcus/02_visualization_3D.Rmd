@@ -22,7 +22,7 @@ for (function_file in function_files) {
 #Shiny
 ##load predictions
 ```{r}
-data_predictions_with_variability <- read.csv("output/data_predictions_with_variability.csv")
+data_predictions_with_variability <- read.csv("output/data_predictions_with_variability.csv", check.names = FALSE)
 ```
 
 
@@ -42,7 +42,7 @@ pdb_annotation_df <- read_csv(pdb_annotation_csv) %>%
 
 ```
 
-
+## current
 ```{r}
 num_bins <- 21
 
@@ -445,9 +445,9 @@ server <- function(input, output) {
     observeEvent({
       input$download_png
     },{
-      proxy <- NGLVieweR_proxy("structure") 
+      filename <- paste0(isolate(structure_id()), ".png")
       
-      filename <- paste0(isolate(structure_id()))
+      proxy <- NGLVieweR_proxy("structure")
       
       proxy %>%
         snapShot(fileName = filename,
@@ -467,8 +467,102 @@ shinyApp(ui, server,
          )
 ```
 
+## variability 
+### score
 ```{r}
+sel_PDB <- "4CP6" 
+sel_PDB_path <- paste0(pdbs_path,sel_PDB,".pdb")
+score_threshold_value = 1.5 #DiscoTope-3.0
+min_var_threshold = 0.00 
 
+sel_df <- pdb_annotation_df %>%
+  filter(structure == sel_PDB) %>%
+  drop_na(resno)
+
+sel_PDB_object <- read.pdb.custom(sel_PDB_path)
+
+# 1. base
+view <- NGLVieweR(sel_PDB_path) %>%
+  stageParameters(backgroundColor = "white") 
+
+# 2. Bin into 21 bins
+sel_df$var_bin <- ifelse(sel_df$var_freq > min_var_threshold, 2, 1)
+
+# 3. Generate RWB color palette
+custom_palette <- colorRampPalette(c("white", "cyan"))(2)
+sel_df$color <- custom_palette[sel_df$var_bin]
+
+# 4. Build NGL selection strings
+sel_df$sele <- as.character(sel_df$resno)
+
+# 5. Group by color
+color_groups <- sel_df %>%
+  dplyr::group_by(color) %>%
+  drop_na(sele) %>%
+  dplyr::summarise(
+    sele = paste0(sele, collapse = " "),
+    .groups = "drop"
+  )
+
+dt3_epitopes <- sel_df$resno[sel_df$`DiscoTope-3.0_calibrated_score` > score_threshold_value]
+
+epitope_color_groups <- sel_df %>%
+  dplyr::group_by(color) %>%
+  filter(sele %in% dt3_epitopes) %>%
+  dplyr::summarise(
+    sele = paste0(sele, collapse = " "),
+    .groups = "drop"
+  )
+  
+
+for (i in seq_len(nrow(color_groups))) {
+  view <- view %>%
+    addRepresentation("cartoon",
+                      param = list(
+                        name = paste0("sel_base", i),
+                        sele = paste0(
+                          "/0 AND :",
+                          unique(na.omit(sel_df$chain)),
+                          " AND (",
+                          color_groups$sele[i],
+                          ")"
+                        ),
+                        color = color_groups$color[i]
+                      )
+    ) %>%
+    
+    addRepresentation("surface",
+                 param = list(
+                   name = paste0("sel_epi", i),
+                   sele = paste0(
+                     "/0 AND :",
+                     unique(na.omit(sel_df$chain)),
+                     " AND (",
+                     epitope_color_groups$sele[i],
+                     ")"
+                   ),
+                   colorValue = epitope_color_groups$color[i]
+                 )
+    )
+}
+
+htmlwidgets::saveWidget(view, "NGLView.html", selfcontained = TRUE)
+browseURL("output/NGLView.html")
+```
+
+```{r}
+sel_df %>% select(color, bin)
+```
+
+
+### binary
+```{r}
+score_threshold_value = 1.5 #DiscoTope-3.0
+```
+
+
+## graph test
+```{r}
 for(
   pdb_entry in unique(na.omit(data_predictions_with_variability_normalized$PDB))
     ) {
@@ -503,7 +597,7 @@ for(
                linetype = "dashed", size = 1) +
     
     scale_color_manual(
-      name = NULL,  # Set to NULL to hide the legend (or give a title if you want)
+      name = NULL,  # Set to NULL to hide the legend
       values = c(
         "Top 10%" = "red",
         "50% max" = "darkgreen",

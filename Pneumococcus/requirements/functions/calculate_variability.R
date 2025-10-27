@@ -35,8 +35,8 @@ calculate_variability <- function(aligned_aa_seqs) {
   
   coverage <- colSums(!is.na(alignment_matrix))
   
-  # couning snps
-  snp_counts <- sapply(seq_len(ncol(alignment_matrix)), function(i) {
+  # couning srps
+  srp_counts <- sapply(seq_len(ncol(alignment_matrix)), function(i) {
     sum(
       alignment_matrix[, i] != consensus_seq[i] &
           alignment_matrix[, i] != "-" & !is.na(alignment_matrix[, i]) &
@@ -44,7 +44,7 @@ calculate_variability <- function(aligned_aa_seqs) {
       )
   })
   
-  snp_frequencies <- snp_counts / coverage
+  srp_frequencies <- srp_counts / coverage
   
   # counting gaps
   gap_counts <- sapply(seq_len(ncol(alignment_matrix)), function(i) {
@@ -76,8 +76,8 @@ calculate_variability <- function(aligned_aa_seqs) {
     position = seq_len(sequence_length),
     consensus_res = consensus_seq,
     residue_tables = residue_tables,
-    snp_counts = snp_counts,
-    snp_freq = snp_frequencies,
+    srp_counts = srp_counts,
+    srp_freq = srp_frequencies,
     gap_counts = gap_counts,
     gap_freq = gap_freq,
     indel_type = indel_type,
@@ -92,7 +92,7 @@ calculate_variability <- function(aligned_aa_seqs) {
         TRUE ~ 0
       ),
       indel_freq = indel_counts / coverage,
-      var_counts = snp_counts + indel_counts,
+      var_counts = srp_counts + indel_counts,
       var_freq = var_counts / coverage,
     )
   

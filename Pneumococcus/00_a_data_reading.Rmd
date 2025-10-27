@@ -84,6 +84,11 @@ data_structural %>% filter(is.na(`PDB entry`)) %>% pull(`Proteins (TIGR4) name`)
 ```
 
 ```{r}
+data_structural %>% filter(!is.na(`PDB entry`)) %>% pull(`Proteins (TIGR4) name`) %>% unique()
+```
+
+
+```{r}
 data_structural %>% filter(New == "Yes")
 ```
 
@@ -215,6 +220,33 @@ data_namesclasspdb <- data_structural %>%
   select(proteinclass, protein, TIGR4_name, PDB, core_genome)
 
 data_namesclasspdb
+```
+
+```{r}
+data_nameclasspdb_with_seroprof <- data_namesclasspdb %>%
+  mutate(
+    protein_adj = case_when(
+      protein == "Pneumolysin" ~ "Ply",
+      TRUE ~ protein
+    ),
+    seroprof_titers = factor(
+      case_when(
+        protein_adj %in% c("Ply", "Hic2", "PspA", "SP_2063", "PpmA", "PnrA", "SatA", "LytC", "SP_0107", "PavB", "AmiA", "AliC", "AliB", "PsaA", "PhtD", "PcsB", "PrtA2", "PcpA", "PspC") ~ "High",
+        protein_adj %in% c("PitB", "PccL", "PiaA", "PfbA", "LytA", "GlpO", "AliA", "PhpP", "PstS2", "SlrA", "CbpL", "CbpC", "CbpE", "DacB", "NanC", "NanA") ~ "Intermediate",
+        protein_adj %in% c("MetQ", "MalX", "Enolase", "AliD", "SP_0899", "SP_1069", "NgtS", "RrgB", "RrgA", "MsrAB2", "GshT", "AdcAII", "TrxB", "SP_2141", "SP_0060", "Etrx2", "SP_0191", "LytB", "PepO", "SP_1992", "Etrx1") ~ "Low",
+        TRUE ~ NA_character_
+      ),
+      levels = c("High", "Intermediate", "Low")
+    ),
+    exposureclass = case_when(
+      proteinclass %in% c("Choline-binding P.","Sortase-anchored P.") ~ "surface_exposed",
+      protein %in% c("Pneumolysin","PhtD", "NanC") ~ "surface_exposed",
+      TRUE ~ "not_exposed"
+    )
+  ) %>%
+  select(-protein_adj) 
+
+data_nameclasspdb_with_seroprof
 ```
 
 

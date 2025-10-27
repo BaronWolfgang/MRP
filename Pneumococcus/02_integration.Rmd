@@ -125,15 +125,19 @@ data_variability
 ```
 
 ```{r}
-data_variability %>% filter(protein == "GlpO")
+data_variability %>%
+  filter(structure == "2BIB") %>%
+  arrange(aligned_posno)
 ```
-
-
 
 
 #!LOW n_seq MATCH FILTER
 ```{r}
-data_variability %>% select(proteinclass, protein, structure, n_seq) %>% arrange(n_seq) %>% unique()
+data_variability %>% 
+  select(proteinclass, protein, structure, n_seq) %>% 
+  group_by(proteinclass, protein, structure) %>% 
+  #mutate(mean_b = mean(b, na.rm = TRUE)) %>% select (-b) %>% 
+  arrange(n_seq) %>% unique()
 ```
 
 ```{r}
@@ -163,9 +167,32 @@ setdiff(
 data_predictions_with_variability <- full_join(
   data_predictions,
   data_variability %>% select(-chain),
-  by = c("proteinclass","protein","structure","resno","resid", "seqresno", "seqres_resid", "x", "y", "z", "b", "PDB", "AF3"))
+  by = c("proteinclass","protein","structure","resno","resid", "seqresno", "seqres_resid", "x", "y", "z", "b", "PDB", "AF3")) %>%
+  mutate(
+    seroprof_titers = data_nameclasspdb_with_seroprof$seroprof_titers[
+      match(protein, data_nameclasspdb_with_seroprof$protein)
+    ]
+  )
 
 data_predictions_with_variability
+```
+
+
+```{r}
+data_predictions_with_variability %>% filter(protein == "PavB")
+
+data_predictions_with_variability %>% 
+  group_by(proteinclass, protein) %>%
+  summarize(
+    has_pdb = any(!is.na(PDB)),
+    has_AF3 = any(!is.na(AF3)),
+    has_AF3_conf = (has_AF3 && (mean(b, na.rm=TRUE) >= 80)),
+    has_var = any(!is.na(var_freq)),
+    complete = (has_pdb &  has_var),
+    complete_adj = ((has_pdb | has_AF3_conf) &  has_var),
+    .groups = "drop"
+  ) %>%
+  filter(complete_adj == TRUE)
 ```
 
 

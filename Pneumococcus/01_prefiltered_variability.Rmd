@@ -99,7 +99,7 @@ aln_protein_names <- sapply(basename(AA_fasfiles), function(x) {
   }
 })
 
-aln_protein_names
+aln_protein_names["07_DacBB_yodJ.AA.aln.fas"] <- "DacB"
 ```
 
 ## Map to PDB's
@@ -545,7 +545,7 @@ for (protein_name in sort(unique(na.omit(map_namesclasspdb_aln_AF3$protein)))) {
   }
   
   # Now loop over whatever structures we found
-  for (structure_id in structure_entries[1]) {
+  for (structure_id in structure_entries) {
     print(structure_id)
     
     # Decide path depending on PDB vs AF3
@@ -717,7 +717,7 @@ for (protein_name in sort(unique(na.omit(map_namesclasspdb_aln_AF3$protein)))) {
 ```
 
 
-```{r}
+```{}
 BrowseSeqs(aligned_combined)
 
 BrowseSeqs(aa_profile)
@@ -726,13 +726,52 @@ ConsensusSequence(aa_profile)
 ```
 
 ```{r}
-h <- entropy(as.matrix(aa_profile))
-con <- as.matrix(ConsensusSequence(aa_profile))
+#We want to capture insertion neighbors and ensure that seqresno positions flanking insertions are given the same insertion id. 
 
-names(h$H) = con
-print(h$H)
+data_variability <- aligned_resno %>%
+  group_by(structure) %>%
+  arrange(aligned_posno) %>%
+  group_modify(~ {
+    df <- .x
+    df$innb_id <- NA_integer_
+    df$varinnb_count <- df$var_counts
 
-h$freq
+    seqna <- is.na(df$seqresno)
+    id <- 0L
+    i <- 1L
+    while (i <= nrow(df)) {
+      if (seqna[i]) {
+        # start of insertion region
+        id <- id + 1L
+        start <- i
+        while (i <= nrow(df) && seqna[i]) i <- i + 1L
+        end <- i - 1L
+
+        before <- if (start > 1) start - 1L else NA_integer_
+        after  <- if (end < nrow(df)) end + 1L else NA_integer_
+
+        med_indel <- median(df$indel_counts[start:end], na.rm = TRUE)
+
+        if (!is.na(before) && !is.na(df$seqresno[before])) {
+          df$innb_id[before] <- id
+          df$varinnb_count[before] <- df$var_counts[before] + med_indel
+        }
+        if (!is.na(after) && !is.na(df$seqresno[after])) {
+          df$innb_id[after] <- id
+          df$varinnb_count[after] <- df$var_counts[after] + med_indel
+        }
+      }
+      i <- i + 1L
+    }
+
+    df
+  }) %>%
+  ungroup() %>%
+  mutate(varinnb_freq = varinnb_count / coverage)
+
+data_variability %>% filter(
+  structure == "2BIB"
+)
 ```
 
 ```{r}
@@ -742,6 +781,11 @@ write.csv(
   row.names=FALSE
 )
 ```
+
+```{r}
+aligned_resno %>% filter(str_detect(AF3, ".pdb"))
+```
+
 
 #### calculate mismatch
 ```{r}
@@ -856,6 +900,12 @@ data_variability <- read.csv("output/data_variability_filtered.csv")
 data_variability
 ```
 
+
+```{r}
+data_variability %>% filter(structure == "4D0Y")
+```
+
+
 #shannon evenness
 ```{r}
 data_variability_shannon <- data_variability %>%
@@ -914,14 +964,30 @@ data_variability_shannon %>%
 
 # plot
 ```{r}
-for (proteinindex in unique(data_variability$protein)[1]) {
-  data_subset <- data_variability %>% filter(protein == proteinindex)
+for (structure_index in unique(sort(data_variability$structure))) {
+  data_subset <- data_variability %>% filter(structure == structure_index)
+  protein_name <- data_subset %>% pull(protein) %>% unique()
   
   plot <- data_subset %>%
-    ggplot(aes(x=seqresno, y=var_counts)) +
-    geom_col() +
-    #scale_x_continuous(limits = c(1, 20), breaks = 1:20) +
-    labs(title = paste0(proteinindex,"\nnumber of seqs: ",unique(data_subset$n_seq))) 
+    pivot_longer(
+      cols = c(srp_counts, indel_counts),
+      names_to = "mutation_type",
+      values_to = "count"
+    ) %>%
+    mutate(
+      mutation_type = factor(mutation_type, levels = c("srp_counts", "indel_counts"),
+                             labels = c("SRP", "Indel"))
+      ) %>%
+    
+    ggplot(aes(x=aligned_posno, y=count, fill=mutation_type)) +
+    geom_col(position = "stack") +
+    scale_fill_manual(values = c("SRP" = "#F0E442", "Indel" = "#009E73")) +
+    labs(title = paste0(protein_name,", ",structure_index,
+                        "\nnumber of seqs: ",unique(data_subset$n_seq),
+                        "\nvariable positions: ", sum(data_subset$var_counts > 0, na.rm=TRUE)
+                        )
+         ) +
+    theme_bw()
     
     print(plot)
 }
@@ -934,23 +1000,18 @@ for (proteinindex in unique(data_variability$protein)[1]) {
 
 
 ```{r}
-data_variability 
-```
-
-
-```{r}
 for (structure_index in unique(data_variability$structure)) {
   data_subset <- data_variability %>% filter(structure == structure_index)
   
   data_long <- data_subset %>%
-    gather(key = "count_type", value = "count_value", snp_counts, gap_counts) %>%
+    gather(key = "count_type", value = "count_value", srp_counts, gap_counts) %>%
     mutate(
       count_type = case_when(
-        count_type == "snp_counts" ~ "snp",  
+        count_type == "srp_counts" ~ "srp",  
         indel_type == "insertion" ~ "Insertion", 
         indel_type == "deletion" ~ "Deletion"  
       ),
-      count_type = factor(count_type, levels = rev(c("Deletion", "Insertion", "snp"))),
+      count_type = factor(count_type, levels = rev(c("Deletion", "Insertion", "srp"))),
       freq_value = count_value / n_seq
     )
   
@@ -958,7 +1019,7 @@ for (structure_index in unique(data_variability$structure)) {
     ggplot(aes(x = aligned_posno, y = freq_value, fill = count_type)) +
     geom_bar(stat = "identity", position = "stack") +
     labs(title = paste0(structure_index,"\nnumber of seqs: ",unique(data_subset$n_seq))) +
-    scale_fill_manual(values = c("snp" = "black", "Insertion" = "skyblue", "Deletion" = "maroon")) +
+    scale_fill_manual(values = c("srp" = "black", "Insertion" = "skyblue", "Deletion" = "maroon")) +
     scale_y_continuous(limits = c(0, 0.5)) +
     theme_bw()
     
@@ -1180,19 +1241,9 @@ for (proteinindex in unique(data_variability$protein)) {
 ```{r}
 data_variability_with_seroprof <- data_variability %>%
   mutate(
-    protein_adj = case_when(
-      protein == "Pneumolysin" ~ "Ply",
-      TRUE ~ protein
-    ),
-    seroprof_titers = factor(
-      case_when(
-        protein_adj %in% c("Ply", "Hic2", "PspA", "SP_2063", "PpmA", "PnrA", "LytC", "SP_0107", "PavB", "AmiA", "AliC", "AliB", "PsaA", "PhtD", "PcsB", "PrtA2", "PcpA", "PspC") ~ "High",
-        protein_adj %in% c("PitB", "PccL", "PiaA", "PfbA", "LytA", "GlpO", "AliA", "PhpP", "PstS2", "SlrA", "CbpL", "CbpC", "CbpE", "DacB", "NanA") ~ "Intermediate",
-        protein_adj %in% c("MetQ", "MalX", "Enolase", "AliD", "SP_0699", "SP_1069", "NgtS", "RrgB", "RrgA", "MsrAB2", "GshT", "AdcAII", "TrxB", "SP_2141", "SP_0060", "Etrx2", "SP_0191", "LytB", "PepO", "SP_1992", "Etrx1") ~ "Low",
-        TRUE ~ NA_character_
-      ),
-      levels = c("High", "Intermediate", "Low")
-    )
+    seroprof_titers = data_nameclasspdb_with_seroprof$seroprof_titers[
+      match(protein, data_nameclasspdb_with_seroprof$protein)
+    ]
   )
 
 data_variability_with_seroprof

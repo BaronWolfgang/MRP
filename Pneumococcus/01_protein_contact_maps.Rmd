@@ -34,7 +34,7 @@ Using EpiGraph same epitope definitions
 
 Definition of neighbours matter: https://pmc.ncbi.nlm.nih.gov/articles/PMC6622159/
 
-## base
+## base CA
 ```{r}
 maxdist <- 10
 
@@ -329,10 +329,113 @@ for (pdb_entry in pdb_files_list[2]) {
 }
 ```
 
+## heavy atoms
+```{r}
+pdb_object$atom %>% filter(chain == "A")
+
+pdb_object$xyz
+```
+
+```{r}
+cutoffdist = 4.5
+maxdist = 10
+
+
+for (pdb_entry in pdb_files_list[3]) {
+  print(pdb_entry)
+  
+  pdb_object <- read.pdb.custom(pdb_entry = pdb_entry, pdb_path = pdbs_path)
+  
+  chains <- unique(pdb_object$atom$chain)
+  
+  for (chain_id in chains) {
+    cat("  Processing chain:", chain_id, "\n")
+    
+    heavy_atoms_dm <- dm(
+      pdb_object, 
+      inds = atom.select(pdb_object, chain = chain_id, type = "ATOM", alt = c(NA, "A")),
+      grp = TRUE
+    )
+    
+    ca_atoms_dm <- dm(
+      pdb_object, 
+      inds = atom.select(pdb_object, chain = chain_id, type = "ATOM", elety = "CA", alt = c(NA, "A")),
+      grp = TRUE
+    )
+    
+    dim(heavy_atoms_dm)
+    
+    length(resnos)
+    
+    resnos <- pdb_object$atom %>% filter(chain == chain_id, elety == "CA", type == "ATOM") %>% pull(resno)
+    
+    # Assign names to distance matrix
+    rownames(heavy_atoms_dm) <- resnos
+    colnames(heavy_atoms_dm) <- resnos
+    
+    heavy_atoms_dm <- heavy_atoms_dm[rev(rownames(heavy_atoms_dm)), ]
+    
+    colorbar_df <- get_residueindex_colors(resnos, rev = FALSE)
+    
+    annotation_df <- data.frame(NGL_Color = as.character(resnos))
+    rownames(annotation_df) <- as.character(resnos)
+    
+    annotation_colors <- list(
+      NGL_Color = setNames(colorbar_df$color, as.character(resnos))
+    )
+    
+    bottom_annot <- HeatmapAnnotation(
+      `Residue Index` = annotation_df$NGL_Color,
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      annotation_name_side = "right",
+      show_legend = FALSE,
+      which = "column"
+    )
+    
+    right_annot <- rowAnnotation(
+      `Residue Index` = rownames(heavy_atoms_dm),
+      col = list(`Residue Index` = annotation_colors$NGL_Color),
+      show_annotation_name = FALSE,
+      show_legend = FALSE
+    )
+    
+    # Plot heatmap
+    ht <- Heatmap(
+      heavy_atoms_dm,
+      name = "Distance (Å)",
+      col = colorRamp2(
+        c(seq(0, cutoffdist, length.out=20),maxdist), 
+        c(rev(viridis(20)), "black")
+      ),
+      na_col = "white",
+      cluster_rows = FALSE,
+      cluster_columns = FALSE,
+      show_row_names = FALSE,
+      show_column_names = FALSE,
+      row_title = NULL,
+      column_title = paste0("Protein contact map (heavy atoms): ", pdb_entry, " (Chain ", chain_id, ")"),
+      bottom_annotation = bottom_annot,
+      right_annotation = right_annot,
+      
+      #heatmap_legend_param = list(
+      #  at = c(seq(0, cutoffdist, length.out = 5), maxdist),
+      #  labels = round(c(seq(0, cutoffdist, length.out = 5), maxdist), 1)
+      #)
+      
+      heatmap_legend_param = list(
+        at = c(0, cutoffdist/2, cutoffdist, maxdist),   # Only these 3 points
+        labels = c("0", round(cutoffdist/2, 1), round(cutoffdist, 1), round(maxdist, 1))  # Labels for the breaks
+      )
+    )
+    
+    draw(ht, heatmap_legend_side = "right")
+  }
+}
+```
+
+
 ## clustering
 ```{r}
-maxdist <- 10
-
 for (pdb_entry in pdb_files_list[3]) {
   print(pdb_entry)
   
@@ -1003,4 +1106,7 @@ for (pdb_entry in pdb_files_list[1:3]) {
   }
 }
 ```
+
+
+
 
